@@ -99,6 +99,10 @@ nixnet is designed for lightweight, reproducible experiments that run real appli
 | `arpPrefill` | `bool` | `false` | Prefill ARP tables with peer MAC addresses at startup. Can be overridden per link or per endpoint. |
 | `sandbox` | `bool` | `true` | Sandbox all scripts with bubblewrap: read-only filesystem access, write access limited to the script's working directory, isolated PID/UTS/IPC namespaces, cleared environment. Can be overridden per namespace or per script. |
 | `inheritPath` | `bool` | `false` | Append the system PATH. Useful for accessing host tools not managed by Nix. |
+| `preSetup` | `str` | `""` | Shell code to run before the setup phase (before namespaces and links are created). Runs as root. |
+| `postSetup` | `str` | `""` | Shell code to run after the setup phase (after namespaces, links, and routes are configured). Runs as root. |
+| `preRun` | `str` | `""` | Shell code to run before the run phase (before scripts are launched). Runs as root. |
+| `postRun` | `str` | `""` | Shell code to run after the run phase (after all awaited scripts have exited). Runs as root. |
 
 ### Namespace options
 
@@ -158,6 +162,17 @@ netem can be set at the link level or per endpoint. Endpoint fields override lin
 | `limit` | `int \| null` | `null` | Queue size in packets. Takes precedence over `autoLimit`. |
 | `autoLimit` | `bool \| null` | `null` | Compute queue limit from the bandwidth-delay product. Requires `delayMs` and `rateMbit`. |
 
+## Execution Phases
+
+The testbed runs in two phases:
+
+1. **Setup** — creates network namespaces, veth pairs, assigns addresses, brings interfaces up, configures MTU, ARP, netem, and routes. Hook: `preSetup` / `postSetup`.
+2. **Run** — launches all background scripts in parallel, then foreground scripts sequentially. Waits for scripts with `await = true` before exiting. Hook: `preRun` / `postRun`.
+
+Cleanup (SIGINT to all child processes, namespace deletion) runs automatically on exit regardless of which phase it occurs in.
+
+All hooks run as root — use with care.
+
 ## Notes
 
 - Requires root (`sudo nix run`). When invoked via `sudo`, file operations (mkdir, output files) run as the original user (`$SUDO_USER`) so results are user-owned.
@@ -184,7 +199,6 @@ watchexec -e nix -- 'nix eval --raw .#legacyPackages.x86_64-linux.mermaid | mmdc
 - random netns postfix to multiple experiments can run at the same time
 - easy nixnet cli tool
 - nixnet mermaid --watch
-- shell hooks for custom commands in different phases similar to `mkDerivation`
 - better IPv6 support
 
 ## Contributing

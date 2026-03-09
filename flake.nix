@@ -246,6 +246,26 @@
             default = false;
             description = "Append the system PATH. Useful for accessing host tools not managed by Nix.";
           };
+          preSetup = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Shell code to run before the setup phase (before namespaces and links are created). Runs as root.";
+          };
+          postSetup = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Shell code to run after the setup phase (after namespaces, links, and routes are configured). Runs as root.";
+          };
+          preRun = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Shell code to run before the run phase (before scripts are launched). Runs as root.";
+          };
+          postRun = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Shell code to run after the run phase (after all awaited scripts have exited). Runs as root.";
+          };
           name = lib.mkOption {
             type = lib.types.str;
             default = "network-testbed";
@@ -619,6 +639,10 @@
               ''${SUDO_USER:+runuser -u "$SUDO_USER" --} mkdir -p "$_WORK_DIR"
               cd "$_WORK_DIR"
             ''}
+            
+            # pre-setup hook
+            ${tb.preSetup}
+
             # create namespaces
             ${lib.concatStringsSep "\n" nsCreateCommands}
 
@@ -660,6 +684,12 @@
 
             echo "testbed| network topology & routing established"
 
+            # post-setup hook
+            ${tb.postSetup}
+
+            # pre-run hook
+            ${tb.preRun}
+
             # launch background scripts
             ${lib.concatStringsSep "\n\n" launchScripts}
 
@@ -670,7 +700,10 @@
             for PID in "''${WAIT_PIDS[@]}"; do
               wait "$PID" 2>/dev/null || true
               echo "testbed| PID $PID ended"
-            done'';
+            done
+
+            # post-run hook
+            ${tb.postRun}'';
         };
       buildMermaid =
         lib: tb:
