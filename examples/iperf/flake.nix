@@ -20,6 +20,10 @@
             workDirEnsureEmpty = true;
             arp = false;
             arpPrefill = true;
+            packages = with pkgs; [
+              coreutils
+              iperf3
+            ];
             namespaces = {
               ns-client = {
                 routes = [
@@ -32,7 +36,7 @@
                   {
                     exec = ''
                       sleep 0.1
-                      ${pkgs.iperf3}/bin/iperf3 -c 10.0.1.2 > ./stdout 2>&1
+                      iperf3 -c 10.0.1.2 > ./stdout 2>&1
                     '';
                     await = true;
                   }
@@ -50,7 +54,7 @@
                   }
                 ];
                 scripts = [
-                  { exec = "${pkgs.iperf3}/bin/iperf3 -s > ./stdout 2>&1"; }
+                  { exec = "iperf3 -s > ./stdout 2>&1"; }
                 ];
                 workDir = "./server";
               };

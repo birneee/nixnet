@@ -138,6 +138,11 @@
                             default = [ ];
                             description = "Packages prepended to PATH for this script only.";
                           };
+                          sandbox = lib.mkOption {
+                            type = lib.types.nullOr lib.types.bool;
+                            default = null;
+                            description = "Sandbox this script with bubblewrap. Overrides namespace-level and top-level sandbox.";
+                          };
                         };
                       }
                     );
@@ -152,6 +157,11 @@
                     type = lib.types.nullOr lib.types.str;
                     default = null;
                     description = "Working directory for this namespace's scripts. Relative to the testbed workDir if not absolute.";
+                  };
+                  sandbox = lib.mkOption {
+                    type = lib.types.nullOr lib.types.bool;
+                    default = null;
+                    description = "Sandbox all scripts in this namespace with bubblewrap. Overrides top-level sandbox.";
                   };
                 };
               }
@@ -226,6 +236,11 @@
             default = [ ];
             description = "Packages prepended to PATH for all scripts in all namespaces.";
           };
+          sandbox = lib.mkOption {
+            type = lib.types.bool;
+            default = true;
+            description = "Sandbox all scripts with bubblewrap: read-only filesystem, write access limited to workDir. Can be overridden per namespace or per script.";
+          };
           name = lib.mkOption {
             type = lib.types.str;
             default = "network-testbed";
@@ -262,7 +277,6 @@
           workDir = tb.workDir;
           workDirEnsureEmpty = tb.workDirEnsureEmpty;
           name = tb.name;
-          tbPackages = tb.packages;
 
           resolveArp = linkCfg: node: resolve3 "arp" node linkCfg tb;
           resolveArpPrefill = linkCfg: node: resolve3 "arpPrefill" node linkCfg tb;
@@ -276,13 +290,14 @@
             (f linkName linkCfg.b)
           ]) links;
 
+          # Compute the PATH for a script: user packages only (runtime deps are for the outer script).
+          mkScriptPkgs = nsCfg: scriptCfg: tb.packages ++ nsCfg.packages ++ scriptCfg.packages;
+
           # Build the indented, escaped bash -c argument for a script entry.
           mkScriptArg =
-            cfg: scriptCfg:
+            nsCfg: scriptCfg:
             let
-              effectivePkgs = tbPackages ++ cfg.packages ++ scriptCfg.packages;
-              pathPrefix = lib.optionalString (effectivePkgs != [ ]) "export PATH=\"${lib.makeBinPath effectivePkgs}:$PATH\"\n";
-              body = lib.strings.trim (pathPrefix + scriptCfg.exec);
+              body = lib.strings.trim scriptCfg.exec;
               indented = lib.concatStringsSep "\n" (
                 map (l: if l == "" then "" else "    " + l) (lib.splitString "\n" body)
               );
@@ -290,7 +305,26 @@
             lib.escapeShellArg ("\n" + indented + "\n  ");
 
           # cd into the namespace workDir, creating it as the original user if needed.
-          mkCdNs = cfg: lib.optionalString (cfg.workDir != null) "\${SUDO_USER:+runuser -u \"$SUDO_USER\" --} mkdir -p '${cfg.workDir}'\n  cd '${cfg.workDir}'";
+          mkCdNs = nsCfg: lib.optionalString (nsCfg.workDir != null) "\${SUDO_USER:+runuser -u \"$SUDO_USER\" --} mkdir -p '${nsCfg.workDir}'\n  cd '${nsCfg.workDir}'";
+
+          # Runtime dependencies of the generated testbed binary.
+          # Also included in every script's PATH via mkScriptArg.
+          runtimeDeps = [
+            pkgs.bash
+            pkgs.iproute2
+            pkgs.coreutils
+            pkgs.procps
+            pkgs.util-linux
+            pkgs.bubblewrap
+          ];
+
+          # Build the bwrap prefix for sandboxing a script (empty string when sandbox is disabled).
+          # Mounts /nix read-only so scripts can access Nix-store binaries,
+          # while only the current working directory is writable.
+          mkBwrapPrefix =
+            nsCfg: scriptCfg:
+            lib.optionalString (resolve3 "sandbox" scriptCfg nsCfg tb)
+              ''"''${_BWRAP[@]}" --bind "$PWD" "$PWD" --'';
 
           # {} in workDir enables repeated-run mode: the script accepts N as $1
           # and loops N times, substituting {} with a zero-padded index each run.
@@ -298,7 +332,7 @@
 
           # Create namespaces
           nsCreateCommands = lib.mapAttrsToList (
-            name: cfg:
+            name: nsCfg:
             lib.concatStringsSep "\n" [
               "ip netns add ${name}"
               "NETNS+=(${name})"
@@ -315,22 +349,22 @@
 
           # Disable IPv6
           nsDisableIpv6Commands = lib.mapAttrsToList (
-            name: cfg:
+            name: nsCfg:
             lib.optionalString
-              (resolve2 "disableIpv6" cfg tb)
+              (resolve2 "disableIpv6" nsCfg tb)
               "ip netns exec ${name} sysctl -w net.ipv6.conf.all.disable_ipv6=1 > /dev/null"
           ) namespaces;
 
           # Set ip_unprivileged_port_start
           nsUnprivilegedPortStartCommands = lib.mapAttrsToList (
-            name: cfg:
-            "ip netns exec ${name} sysctl -w net.ipv4.ip_unprivileged_port_start=${toString cfg.ipUnprivilegedPortStart} > /dev/null"
+            name: nsCfg:
+            "ip netns exec ${name} sysctl -w net.ipv4.ip_unprivileged_port_start=${toString nsCfg.ipUnprivilegedPortStart} > /dev/null"
           ) namespaces;
 
           # Enable IPv4 forwarding
           nsForwardCommands = lib.mapAttrsToList (
-            name: cfg:
-            lib.optionalString cfg.ipv4Forward "ip netns exec ${name} sysctl -w net.ipv4.ip_forward=1 | sed 's/^/${name}| /'"
+            name: nsCfg:
+            lib.optionalString nsCfg.ipv4Forward "ip netns exec ${name} sysctl -w net.ipv4.ip_forward=1 | sed 's/^/${name}| /'"
           ) namespaces;
 
           # Build a tc netem command string from a resolved netem config and interface.
@@ -411,48 +445,50 @@
             in
             concatNonEmpty [
               (lib.optionalString arpPrefillA
-                "ip netns exec ${linkCfg.a.ns} ip neigh add ${ipv4RemovePrefix linkCfg.b.ipv4} lladdr \"$(ip netns exec ${linkCfg.b.ns} cat /sys/class/net/${linkName}/address)\" dev ${linkName}"
+                "_MAC=$(ip netns exec ${linkCfg.b.ns} cat /sys/class/net/${linkName}/address)\nip netns exec ${linkCfg.a.ns} ip neigh add ${ipv4RemovePrefix linkCfg.b.ipv4} lladdr \"$_MAC\" dev ${linkName}"
               )
               (lib.optionalString arpPrefillB
-                "ip netns exec ${linkCfg.b.ns} ip neigh add ${ipv4RemovePrefix linkCfg.a.ipv4} lladdr \"$(ip netns exec ${linkCfg.a.ns} cat /sys/class/net/${linkName}/address)\" dev ${linkName}"
+                "_MAC=$(ip netns exec ${linkCfg.a.ns} cat /sys/class/net/${linkName}/address)\nip netns exec ${linkCfg.b.ns} ip neigh add ${ipv4RemovePrefix linkCfg.a.ipv4} lladdr \"$_MAC\" dev ${linkName}"
               )
             ]
           ) links;
 
           # Declarative Routing
           routeCommands = lib.mapAttrsToList (
-            name: cfg:
+            name: nsCfg:
             concatNonEmpty (
-              lib.optional (cfg.defaultRoute != null) "ip netns exec ${name} ip route add default via ${cfg.defaultRoute}"
-              ++ map (route: "ip netns exec ${name} ip route add ${route.subnet} via ${route.via}") cfg.routes
+              lib.optional (nsCfg.defaultRoute != null) "ip netns exec ${name} ip route add default via ${nsCfg.defaultRoute}"
+              ++ map (route: "ip netns exec ${name} ip route add ${route.subnet} via ${route.via}") nsCfg.routes
             )
           ) namespaces;
 
           # Launch scripts in parallel; mark awaited ones; skip foreground scripts
           launchScripts = lib.concatLists (
             lib.mapAttrsToList (
-              name: cfg:
+              name: nsCfg:
               lib.concatLists (
                 map (
                   scriptCfg:
                   lib.optional (!scriptCfg.foreground) (
                     let
-                      script = mkScriptArg cfg scriptCfg;
-                      toOutput = if resolve2 "stdout" cfg tb then "2>&1 | sed 's/^/${name}| /'" else "> /dev/null 2>&1";
-                      cdNs = mkCdNs cfg;
+                      scriptPath = lib.makeBinPath (mkScriptPkgs nsCfg scriptCfg);
+                      script = mkScriptArg nsCfg scriptCfg;
+                      toOutput = if resolve2 "stdout" nsCfg tb then "2>&1 | sed 's/^/${name}| /'" else "> /dev/null 2>&1";
+                      cdNs = mkCdNs nsCfg;
                     in
                     concatNonEmpty [
                       "("
                       "  set +m"
                       (lib.optionalString (cdNs != "") "  ${cdNs}")
-                      "  stdbuf -oL ip netns exec ${name} \${SUDO_USER:+runuser -u \"$SUDO_USER\" --} bash -c ${script} ${toOutput}"
+                      "  _PATH=\"${scriptPath}\""
+                      "  stdbuf -oL ip netns exec ${name} \${SUDO_USER:+runuser -u \"$SUDO_USER\" --} ${mkBwrapPrefix nsCfg scriptCfg} \"$_ENV\" PATH=\"$_PATH\" \"$_BASH\" -c ${script} ${toOutput}"
                       ") &"
                       "echo \"${name}| PID $! started\""
                       "PIDS+=($!)"
                       (lib.optionalString scriptCfg.await "WAIT_PIDS+=($!)")
                     ]
                   )
-                ) cfg.scripts
+                ) nsCfg.scripts
               )
             ) namespaces
           );
@@ -460,25 +496,27 @@
           # Foreground scripts (run after background scripts are started)
           fgScripts = lib.concatLists (
             lib.mapAttrsToList (
-              name: cfg:
+              name: nsCfg:
               lib.concatLists (
                 map (
                   scriptCfg:
                   lib.optional scriptCfg.foreground (
                     let
-                      script = mkScriptArg cfg scriptCfg;
-                      cdNs = mkCdNs cfg;
+                      scriptPath = lib.makeBinPath (mkScriptPkgs nsCfg scriptCfg);
+                      script = mkScriptArg nsCfg scriptCfg;
+                      cdNs = mkCdNs nsCfg;
                     in
                     concatNonEmpty [
                       "echo \"${name}| start foreground script\""
                       "("
                       (lib.optionalString (cdNs != "") "  ${cdNs}")
-                      "  ip netns exec ${name} \${SUDO_USER:+runuser -u \"$SUDO_USER\" --} bash -c ${script}"
+                      "  _PATH=\"${scriptPath}\""
+                      "  ip netns exec ${name} \${SUDO_USER:+runuser -u \"$SUDO_USER\" --} ${mkBwrapPrefix nsCfg scriptCfg} \"$_ENV\" PATH=\"$_PATH\" \"$_BASH\" -c ${script}"
                       ")"
                       "echo \"${name}| end foreground script\""
                     ]
                   )
-                ) cfg.scripts
+                ) nsCfg.scripts
               )
             ) namespaces
           );
@@ -486,12 +524,7 @@
         pkgs.writeShellApplication {
           inherit name;
           excludeShellChecks = [ "SC2016" ]; # $PATH in bash -c single-quoted arg is intentional
-          runtimeInputs = [
-            pkgs.iproute2
-            pkgs.coreutils
-            pkgs.procps
-            pkgs.util-linux
-          ];
+          runtimeInputs = runtimeDeps;
           text = ''
             if [ "$EUID" -ne 0 ]; then echo "testbed| Error: Run as root"; exit 1; fi
 
@@ -500,6 +533,10 @@
             PIDS=()
             WAIT_PIDS=()
             NETNS=()
+            
+            _BASH='${pkgs.bash}/bin/bash'
+            _ENV='${pkgs.coreutils}/bin/env'
+            _BWRAP=(bwrap --ro-bind /nix /nix --ro-bind /sys /sys --dev /dev --proc /proc --tmpfs /tmp --unshare-all --share-net --clearenv)
 
             cleanup() {
               echo "testbed| cleaning up..."

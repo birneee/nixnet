@@ -96,6 +96,7 @@ nixnet is designed for lightweight, reproducible experiments that run real appli
 | `disableIpv6` | `bool` | `false` | Disable IPv6 in all namespaces. Can be overridden per namespace. |
 | `arp` | `bool` | `true` | Enable ARP on all interfaces. Can be overridden per link or per endpoint. |
 | `arpPrefill` | `bool` | `false` | Prefill ARP tables with peer MAC addresses at startup. Can be overridden per link or per endpoint. |
+| `sandbox` | `bool` | `true` | Sandbox all scripts with bubblewrap: read-only filesystem access, write access limited to the script's working directory. Can be overridden per namespace or per script. |
 
 ### Namespace options
 
@@ -110,6 +111,7 @@ nixnet is designed for lightweight, reproducible experiments that run real appli
 | `scripts` | `list` | `[]` | Scripts to run in this namespace. Background scripts are launched in parallel; foreground scripts run sequentially after all background scripts are started. |
 | `stdout` | `bool \| null` | `null` | Print script output to the console. Overrides top-level `stdout`. |
 | `workDir` | `str \| null` | `null` | Working directory for all scripts in this namespace. Relative to the testbed `workDir` if not absolute. |
+| `sandbox` | `bool \| null` | `null` | Sandbox all scripts in this namespace with bubblewrap. Overrides top-level `sandbox`. |
 
 ### Script options
 
@@ -119,6 +121,7 @@ nixnet is designed for lightweight, reproducible experiments that run real appli
 | `await` | `bool` | `false` | Wait for this script to exit before stopping the testbed. Only applies to background scripts. |
 | `foreground` | `bool` | `false` | Run this script in the foreground without output redirection. Runs after all background scripts are started. Use for interactive shells or tools that require a terminal. |
 | `packages` | `list` | `[]` | Packages prepended to PATH for this script only. |
+| `sandbox` | `bool \| null` | `null` | Sandbox this script with bubblewrap. Overrides namespace-level and top-level `sandbox`. |
 
 ### Link options
 
@@ -175,7 +178,6 @@ watchexec -e nix -- 'nix eval --raw .#legacyPackages.x86_64-linux.mermaid | mmdc
 ```
 
 ## Todos
-- bwrap so experiments can only access its output
 - tmux for each namespace
 - random netns postfix to multiple experiments can run at the same time
 - easy nixnet cli tool

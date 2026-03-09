@@ -24,7 +24,10 @@
               ns-client = {
                 scripts = [
                   {
-                    exec = "${pkgs.iputils}/bin/ping -c 5 10.0.0.2 > ./stdout 2>&1";
+                    packages = with pkgs; [
+                      iputils
+                    ];
+                    exec = "ping -c 5 10.0.0.2 > ./stdout 2>&1";
                     await = true;
                   }
                 ];
