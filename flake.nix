@@ -256,8 +256,17 @@
       ipv4RemovePrefix = cidr: builtins.head (builtins.split "/" cidr);
 
       # Pick the first non-null value for `field` across two or three attrsets (highest priority first).
-      resolve2 = field: a: b: if a.${field} != null then a.${field} else b.${field};
-      resolve3 = field: a: b: c: if a.${field} != null then a.${field} else if b.${field} != null then b.${field} else c.${field};
+      resolve2 =
+        field: a: b:
+        if a.${field} != null then a.${field} else b.${field};
+      resolve3 =
+        field: a: b: c:
+        if a.${field} != null then
+          a.${field}
+        else if b.${field} != null then
+          b.${field}
+        else
+          c.${field};
 
       # Merge two netem configs field-by-field: interface fields override link fields.
       resolveNetem =
@@ -270,7 +279,13 @@
           null
         else
           builtins.mapAttrs (
-            f: _: if n != null && n.${f} != null then n.${f} else if l != null then l.${f} else null
+            f: _:
+            if n != null && n.${f} != null then
+              n.${f}
+            else if l != null then
+              l.${f}
+            else
+              null
           ) (if n != null then n else l);
 
       buildTestbed =
@@ -290,10 +305,15 @@
           concatNonEmpty = strs: lib.concatStringsSep "\n" (lib.filter (s: s != "") strs);
 
           # Generate two shell commands for both ends (a and b) of a link.
-          mkLinkPairCmds = f: lib.mapAttrsToList (linkName: linkCfg: lib.concatStringsSep "\n" [
-            (f linkName linkCfg.a)
-            (f linkName linkCfg.b)
-          ]) links;
+          mkLinkPairCmds =
+            f:
+            lib.mapAttrsToList (
+              linkName: linkCfg:
+              lib.concatStringsSep "\n" [
+                (f linkName linkCfg.a)
+                (f linkName linkCfg.b)
+              ]
+            ) links;
 
           # Compute the PATH for a script: user packages only (runtime deps are for the outer script).
           mkScriptPkgs = nsCfg: scriptCfg: tb.packages ++ nsCfg.packages ++ scriptCfg.packages;
@@ -310,7 +330,10 @@
             lib.escapeShellArg ("\n" + indented + "\n  ");
 
           # cd into the namespace workDir, creating it as the original user if needed.
-          mkCdNs = nsCfg: lib.optionalString (nsCfg.workDir != null) "\${SUDO_USER:+runuser -u \"$SUDO_USER\" --} mkdir -p '${nsCfg.workDir}'\n  cd '${nsCfg.workDir}'";
+          mkCdNs =
+            nsCfg:
+            lib.optionalString (nsCfg.workDir != null)
+              "\${SUDO_USER:+runuser -u \"$SUDO_USER\" --} mkdir -p '${nsCfg.workDir}'\n  cd '${nsCfg.workDir}'";
 
           # Runtime dependencies of the generated testbed binary.
           # Also included in every script's PATH via mkScriptArg.
@@ -329,8 +352,9 @@
           # while only the current working directory is writable.
           mkBwrapPrefix =
             nsCfg: scriptCfg:
-            lib.optionalString (resolve3 "sandbox" scriptCfg nsCfg tb)
-              ''"''${_BWRAP[@]}" --bind "$PWD" "$PWD" --'';
+            lib.optionalString (resolve3 "sandbox" scriptCfg nsCfg
+              tb
+            ) ''"''${_BWRAP[@]}" --bind "$PWD" "$PWD" --'';
 
           # {} in workDir enables repeated-run mode: the script accepts N as $1
           # and loops N times, substituting {} with a zero-padded index each run.
@@ -356,9 +380,9 @@
           # Disable IPv6
           nsDisableIpv6Commands = lib.mapAttrsToList (
             name: nsCfg:
-            lib.optionalString
-              (resolve2 "disableIpv6" nsCfg tb)
-              "ip netns exec ${name} sysctl -w net.ipv6.conf.all.disable_ipv6=1 > /dev/null"
+            lib.optionalString (resolve2 "disableIpv6" nsCfg
+              tb
+            ) "ip netns exec ${name} sysctl -w net.ipv6.conf.all.disable_ipv6=1 > /dev/null"
           ) namespaces;
 
           # Set ip_unprivileged_port_start
@@ -412,13 +436,19 @@
           ) links;
 
           # Assign IP addresses
-          linkAddrCommands = mkLinkPairCmds (linkName: iface: "ip netns exec ${iface.ns} ip addr add ${iface.ipv4} dev ${linkName}");
+          linkAddrCommands = mkLinkPairCmds (
+            linkName: iface: "ip netns exec ${iface.ns} ip addr add ${iface.ipv4} dev ${linkName}"
+          );
 
           # Bring link interfaces up
-          linkIfUpCommands = mkLinkPairCmds (linkName: iface: "ip netns exec ${iface.ns} ip link set ${linkName} up");
+          linkIfUpCommands = mkLinkPairCmds (
+            linkName: iface: "ip netns exec ${iface.ns} ip link set ${linkName} up"
+          );
 
           # Configure MTU
-          linkMtuCommands = mkLinkPairCmds (linkName: iface: "ip netns exec ${iface.ns} ip link set ${linkName} mtu ${toString iface.mtu}");
+          linkMtuCommands = mkLinkPairCmds (
+            linkName: iface: "ip netns exec ${iface.ns} ip link set ${linkName} mtu ${toString iface.mtu}"
+          );
 
           # Configure ARP
           linkArpCommands = lib.mapAttrsToList (
@@ -450,12 +480,8 @@
               arpPrefillB = resolveArpPrefill linkCfg linkCfg.b;
             in
             concatNonEmpty [
-              (lib.optionalString arpPrefillA
-                "_MAC=$(ip netns exec ${linkCfg.b.ns} cat /sys/class/net/${linkName}/address)\nip netns exec ${linkCfg.a.ns} ip neigh add ${ipv4RemovePrefix linkCfg.b.ipv4} lladdr \"$_MAC\" dev ${linkName}"
-              )
-              (lib.optionalString arpPrefillB
-                "_MAC=$(ip netns exec ${linkCfg.a.ns} cat /sys/class/net/${linkName}/address)\nip netns exec ${linkCfg.b.ns} ip neigh add ${ipv4RemovePrefix linkCfg.a.ipv4} lladdr \"$_MAC\" dev ${linkName}"
-              )
+              (lib.optionalString arpPrefillA "_MAC=$(ip netns exec ${linkCfg.b.ns} cat /sys/class/net/${linkName}/address)\nip netns exec ${linkCfg.a.ns} ip neigh add ${ipv4RemovePrefix linkCfg.b.ipv4} lladdr \"$_MAC\" dev ${linkName}")
+              (lib.optionalString arpPrefillB "_MAC=$(ip netns exec ${linkCfg.a.ns} cat /sys/class/net/${linkName}/address)\nip netns exec ${linkCfg.b.ns} ip neigh add ${ipv4RemovePrefix linkCfg.a.ipv4} lladdr \"$_MAC\" dev ${linkName}")
             ]
           ) links;
 
@@ -463,7 +489,9 @@
           routeCommands = lib.mapAttrsToList (
             name: nsCfg:
             concatNonEmpty (
-              lib.optional (nsCfg.defaultRoute != null) "ip netns exec ${name} ip route add default via ${nsCfg.defaultRoute}"
+              lib.optional (
+                nsCfg.defaultRoute != null
+              ) "ip netns exec ${name} ip route add default via ${nsCfg.defaultRoute}"
               ++ map (route: "ip netns exec ${name} ip route add ${route.subnet} via ${route.via}") nsCfg.routes
             )
           ) namespaces;
@@ -532,7 +560,7 @@
           excludeShellChecks = [ "SC2016" ]; # $PATH in bash -c single-quoted arg is intentional
           text = ''
             export PATH="${lib.makeBinPath runtimeDeps}${lib.optionalString tb.inheritPath ":$PATH"}"
-            
+
             if [ "$EUID" -ne 0 ]; then echo "testbed| Error: Run as root"; exit 1; fi
 
             set -m  # enable job control: each background job gets its own process group
@@ -540,7 +568,7 @@
             PIDS=()
             WAIT_PIDS=()
             NETNS=()
-            
+
             _BASH='${pkgs.bash}/bin/bash'
             _ENV='${pkgs.coreutils}/bin/env'
             _BWRAP=(bwrap --ro-bind /nix /nix --ro-bind /sys /sys --dev /dev --proc /proc --tmpfs /tmp --unshare-all --share-net --clearenv)
