@@ -241,6 +241,11 @@
             default = true;
             description = "Sandbox all scripts with bubblewrap: read-only filesystem, write access limited to workDir. Can be overridden per namespace or per script.";
           };
+          inheritPath = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Append the system PATH. Useful for accessing host tools not managed by Nix.";
+          };
           name = lib.mkOption {
             type = lib.types.str;
             default = "network-testbed";
@@ -313,6 +318,7 @@
             pkgs.bash
             pkgs.iproute2
             pkgs.coreutils
+            pkgs.gnused
             pkgs.procps
             pkgs.util-linux
             pkgs.bubblewrap
@@ -480,7 +486,7 @@
                       "("
                       "  set +m"
                       (lib.optionalString (cdNs != "") "  ${cdNs}")
-                      "  _PATH=\"${scriptPath}\""
+                      "  _PATH=\"${scriptPath}${lib.optionalString tb.inheritPath ":$PATH"}\""
                       "  stdbuf -oL ip netns exec ${name} \${SUDO_USER:+runuser -u \"$SUDO_USER\" --} ${mkBwrapPrefix nsCfg scriptCfg} \"$_ENV\" PATH=\"$_PATH\" \"$_BASH\" -c ${script} ${toOutput}"
                       ") &"
                       "echo \"${name}| PID $! started\""
@@ -510,7 +516,7 @@
                       "echo \"${name}| start foreground script\""
                       "("
                       (lib.optionalString (cdNs != "") "  ${cdNs}")
-                      "  _PATH=\"${scriptPath}\""
+                      "  _PATH=\"${scriptPath}${lib.optionalString tb.inheritPath ":$PATH"}\""
                       "  ip netns exec ${name} \${SUDO_USER:+runuser -u \"$SUDO_USER\" --} ${mkBwrapPrefix nsCfg scriptCfg} \"$_ENV\" PATH=\"$_PATH\" \"$_BASH\" -c ${script}"
                       ")"
                       "echo \"${name}| end foreground script\""
@@ -524,8 +530,9 @@
         pkgs.writeShellApplication {
           inherit name;
           excludeShellChecks = [ "SC2016" ]; # $PATH in bash -c single-quoted arg is intentional
-          runtimeInputs = runtimeDeps;
           text = ''
+            export PATH="${lib.makeBinPath runtimeDeps}${lib.optionalString tb.inheritPath ":$PATH"}"
+            
             if [ "$EUID" -ne 0 ]; then echo "testbed| Error: Run as root"; exit 1; fi
 
             set -m  # enable job control: each background job gets its own process group

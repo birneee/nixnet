@@ -20,7 +20,7 @@ Add nixnet as a flake input and call `mkTestbed` from `legacyPackages`:
       systems = [ "x86_64-linux" "aarch64-linux" ];
       perSystem = { pkgs, inputs', ... }: {
         packages.default = inputs'.nixnet.legacyPackages.mkTestbed {
-          packages = [ pkgs.iperf3 ];
+          packages = with pkgs; [ coreutils iperf3 ];
           namespaces = {
             client.scripts = [{
               exec = "sleep 0.1; iperf3 -c 10.0.0.2";
@@ -55,8 +55,9 @@ sudo nix run
 - **netem** — delay, loss, rate limiting per link or endpoint
 - **Routing** — static routes, default routes, IP forwarding
 - **ARP control** — disable ARP or prefill tables with peer MACs
-- **Repeatable** — repeat with `sudo nix run . -- 1-5`; `{}` in `workDir` becomes a run index
+- **Repeatable** — repeat with `sudo nix run . 1-5`; `{}` in `workDir` becomes a run index
 - **Foreground scripts** — full terminal access for interactive tools
+- **Sandboxing** — scripts are isolated with bubblewrap to prevent side effects
 - **Automatic cleanup** — namespaces and processes cleaned up on exit
 - **Mermaid diagrams** — topology diagram from config
 
@@ -65,15 +66,15 @@ sudo nix run
 | | nixnet | [mininet](https://mininet.org) | [containerlab](https://containerlab.dev) | manual scripts |
 |---|---|---|---|---|
 | **Config** | Nix | Python | YAML | bash |
-| **Isolation** | network namespaces | network namespaces | containers (Docker) | network namespaces |
+| **Isolation** | network namespaces + bubblewrap | network namespaces | containers (Docker) | network namespaces |
 | **Reproducibility** | ✓ | ✗ | partial | ✗ |
 | **Real network stack** | ✓ | ✓ | ✓ | ✓ |
 | **Cleanup on exit** | ✓ | ✓ | ✓ | manual |
-| **Runtime dependency** | iproute2 only | Python + OVS | Docker | iproute2 |
-| **Dependency management** | nixpkgs | pip / apt | Docker images | manual |
+| **Runtime dependency** | Nix | Python + OVS | Docker | iproute2 |
+| **Dependency management** | nixpkgs | pip / manual | Docker images | manual |
 | **Visualization** | mermaid diagram | ✓ | ✓ | ✗ |
 
-nixnet is designed for lightweight, reproducible experiments that run real application binaries directly in network namespaces — no container overhead, no Python runtime, no daemon. The output is a single self-contained shell script pinned to exact package versions via Nix.
+nixnet is designed for lightweight, reproducible experiments that run real application binaries directly in network namespaces — no container overhead, no Python runtime, no daemon. Nix is the only runtime dependency; all other tools including iproute2 are fetched from nixpkgs. The output is a single self-contained shell script pinned to exact package versions via Nix.
 
 ## Examples
 
@@ -96,7 +97,8 @@ nixnet is designed for lightweight, reproducible experiments that run real appli
 | `disableIpv6` | `bool` | `false` | Disable IPv6 in all namespaces. Can be overridden per namespace. |
 | `arp` | `bool` | `true` | Enable ARP on all interfaces. Can be overridden per link or per endpoint. |
 | `arpPrefill` | `bool` | `false` | Prefill ARP tables with peer MAC addresses at startup. Can be overridden per link or per endpoint. |
-| `sandbox` | `bool` | `true` | Sandbox all scripts with bubblewrap: read-only filesystem access, write access limited to the script's working directory. Can be overridden per namespace or per script. |
+| `sandbox` | `bool` | `true` | Sandbox all scripts with bubblewrap: read-only filesystem access, write access limited to the script's working directory, isolated PID/UTS/IPC namespaces, cleared environment. Can be overridden per namespace or per script. |
+| `inheritPath` | `bool` | `false` | Append the system PATH. Useful for accessing host tools not managed by Nix. |
 
 ### Namespace options
 
