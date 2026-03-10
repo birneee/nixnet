@@ -50,7 +50,7 @@ sudo nix run
 ## Features
 
 - **Portable** — runs on any Linux machine with Nix installed
-- **Declarative** — namespaces, links, routes, and scripts defined in Nix
+- **Declarative** — namespaces, bridges, links, routes, and scripts defined in Nix
 - **Reproducible** — all binaries pinned via nixpkgs
 - **netem** — delay, loss, rate limiting per link or endpoint
 - **Routing** — static routes, default routes, IP forwarding
@@ -89,6 +89,7 @@ nixnet is designed for lightweight, reproducible experiments that run real appli
 |---|---|---|---|
 | `name` | `str` | `"network-testbed"` | Name of the output binary. |
 | `namespaces` | `attrs` | `{}` | Network namespaces to create. |
+| `bridges` | `list` | `[]` | Linux bridges to create. Each bridge gets its own network namespace of the same name. |
 | `links` | `attrs` | `{}` | Veth link pairs connecting namespaces. |
 | `packages` | `list` | `[]` | Packages prepended to PATH for all scripts in all namespaces. |
 | `workDir` | `str \| null` | `null` | Working directory for the testbed. Created if absent. If the path contains `{}`, it is replaced at runtime with a two-digit zero-padded run index (default `00`), e.g. `"./out/{}"` with `sudo nix run . -- 5` uses `./out/05`. Pass a range to run multiple times: `sudo nix run . -- 1-5`. |
@@ -143,7 +144,7 @@ nixnet is designed for lightweight, reproducible experiments that run real appli
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `ns` | `str` | — | Namespace this endpoint belongs to. |
+| `ns` | `str` | — | Namespace or bridge to link. |
 | `ipv4` | `str` | — | IPv4 address with prefix length, e.g. `"10.0.0.1/24"`. |
 | `mtu` | `int` | `1500` | MTU for this interface. |
 | `netem` | `attrs \| null` | `null` | netem parameters. Individual fields override the link-level `netem`. |

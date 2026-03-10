@@ -41,9 +41,10 @@
           };
           iface = lib.types.submodule {
             options = {
-              ns = lib.mkOption { type = lib.types.str; };
+              ns = lib.mkOption { type = lib.types.str; description = "Namespace or bridge to link."; };
               ipv4 = lib.mkOption {
-                type = lib.types.strMatching "([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[1-2][0-9]|3[0-2])";
+                type = lib.types.nullOr (lib.types.strMatching "([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[1-2][0-9]|3[0-2])");
+                default = null;
                 description = "IPv4 address with prefix length, e.g. \"10.0.0.1/24\".";
               };
               mtu = lib.mkOption {
@@ -201,6 +202,12 @@
             );
           };
 
+          bridges = lib.mkOption {
+            default = [ ];
+            type = lib.types.listOf lib.types.str;
+            description = "Bridges to create. Each bridge gets its own network namespace of the same name.";
+          };
+
           disableIpv6 = lib.mkOption {
             type = lib.types.bool;
             default = false;
@@ -321,6 +328,8 @@
           resolveArp = linkCfg: node: resolve3 "arp" node linkCfg tb;
           resolveArpPrefill = linkCfg: node: resolve3 "arpPrefill" node linkCfg tb;
 
+          execNs = ns: lib.optionalString (ns != null) "ip netns exec ${ns} ";
+
           # Join non-empty strings with newlines.
           concatNonEmpty = strs: lib.concatStringsSep "\n" (lib.filter (s: s != "") strs);
 
@@ -329,7 +338,7 @@
             f:
             lib.mapAttrsToList (
               linkName: linkCfg:
-              lib.concatStringsSep "\n" [
+              concatNonEmpty [
                 (f linkName linkCfg.a)
                 (f linkName linkCfg.b)
               ]
@@ -380,14 +389,11 @@
           # and loops N times, substituting {} with a zero-padded index each run.
           hasTemplate = workDir != null && lib.hasInfix "{}" workDir;
 
-          # Create namespaces
-          nsCreateCommands = lib.mapAttrsToList (
-            name: nsCfg:
-            lib.concatStringsSep "\n" [
-              "ip netns add ${name}"
-              "NETNS+=(${name})"
-            ]
-          ) namespaces;
+          # Create namespaces (including bridge namespaces)
+          nsCreateCommands = map (name: lib.concatStringsSep "\n" [
+            "ip netns add ${name}"
+            "NETNS+=(${name})"
+          ]) (lib.attrNames namespaces ++ tb.bridges);
 
           # Set ping group range
           nsPingGroupRangeCommands = lib.mapAttrsToList (
@@ -446,7 +452,7 @@
                   ]
                 );
               in
-              "ip netns exec ${ns} tc qdisc add dev ${dev} root netem ${params}"
+              "${execNs ns}tc qdisc add dev ${dev} root netem ${params}"
             );
 
           # Create veth pairs
@@ -457,17 +463,23 @@
 
           # Assign IP addresses
           linkAddrCommands = mkLinkPairCmds (
-            linkName: iface: "ip netns exec ${iface.ns} ip addr add ${iface.ipv4} dev ${linkName}"
+            linkName: iface: lib.optionalString (iface.ipv4 != null) "${execNs iface.ns}ip addr add ${iface.ipv4} dev ${linkName}"
           );
 
           # Bring link interfaces up
           linkIfUpCommands = mkLinkPairCmds (
-            linkName: iface: "ip netns exec ${iface.ns} ip link set ${linkName} up"
+            linkName: iface: "${execNs iface.ns}ip link set ${linkName} up"
+          );
+
+          # Attach interfaces to bridge
+          linkBridgeCommands = mkLinkPairCmds (
+            linkName: iface:
+            lib.optionalString (builtins.elem iface.ns tb.bridges) "${execNs iface.ns}ip link set ${linkName} master ${iface.ns}"
           );
 
           # Configure MTU
           linkMtuCommands = mkLinkPairCmds (
-            linkName: iface: "ip netns exec ${iface.ns} ip link set ${linkName} mtu ${toString iface.mtu}"
+            linkName: iface: "${execNs iface.ns}ip link set ${linkName} mtu ${toString iface.mtu}"
           );
 
           # Configure ARP
@@ -478,8 +490,8 @@
               arpB = resolveArp linkCfg linkCfg.b;
             in
             concatNonEmpty [
-              (lib.optionalString (!arpA) "ip netns exec ${linkCfg.a.ns} ip link set ${linkName} arp off")
-              (lib.optionalString (!arpB) "ip netns exec ${linkCfg.b.ns} ip link set ${linkName} arp off")
+              (lib.optionalString (!arpA) "${execNs linkCfg.a.ns}ip link set ${linkName} arp off")
+              (lib.optionalString (!arpB) "${execNs linkCfg.b.ns}ip link set ${linkName} arp off")
             ]
           ) links;
 
@@ -498,10 +510,14 @@
             let
               arpPrefillA = resolveArpPrefill linkCfg linkCfg.a;
               arpPrefillB = resolveArpPrefill linkCfg linkCfg.b;
+              nsA = execNs linkCfg.a.ns;
+              nsB = execNs linkCfg.b.ns;
+              mkPrefill = nsLocal: nsPeer: peerIpv4:
+                "_MAC=$(${nsPeer}cat /sys/class/net/${linkName}/address)\n${nsLocal}ip neigh add ${ipv4RemovePrefix peerIpv4} lladdr \"$_MAC\" dev ${linkName}";
             in
             concatNonEmpty [
-              (lib.optionalString arpPrefillA "_MAC=$(ip netns exec ${linkCfg.b.ns} cat /sys/class/net/${linkName}/address)\nip netns exec ${linkCfg.a.ns} ip neigh add ${ipv4RemovePrefix linkCfg.b.ipv4} lladdr \"$_MAC\" dev ${linkName}")
-              (lib.optionalString arpPrefillB "_MAC=$(ip netns exec ${linkCfg.a.ns} cat /sys/class/net/${linkName}/address)\nip netns exec ${linkCfg.b.ns} ip neigh add ${ipv4RemovePrefix linkCfg.a.ipv4} lladdr \"$_MAC\" dev ${linkName}")
+              (lib.optionalString (arpPrefillA && linkCfg.b.ipv4 != null) (mkPrefill nsA nsB linkCfg.b.ipv4))
+              (lib.optionalString (arpPrefillB && linkCfg.a.ipv4 != null) (mkPrefill nsB nsA linkCfg.a.ipv4))
             ]
           ) links;
 
@@ -515,6 +531,16 @@
               ++ map (route: "ip netns exec ${name} ip route add ${route.subnet} via ${route.via}") nsCfg.routes
             )
           ) namespaces;
+
+          # Create bridge devices inside their namespaces.
+          bridgeAddCommands = map (brName:
+            "ip netns exec ${brName} ip link add ${brName} type bridge stp_state 0"
+          ) tb.bridges;
+
+          # Set bridges to up
+          bridgeUpCommands = map (brName:
+            "ip netns exec ${brName} ip link set ${brName} up"
+          ) tb.bridges;
 
           # Launch scripts in parallel; mark awaited ones; skip foreground scripts
           launchScripts = lib.concatLists (
@@ -658,11 +684,20 @@
             # enable ip_forward
             ${concatNonEmpty nsForwardCommands}
 
+            # create bridges
+            ${lib.concatStringsSep "\n" bridgeAddCommands}
+
             # create links
             ${lib.concatStringsSep "\n" linkCreateCommands}
 
             # assign addresses
             ${lib.concatStringsSep "\n" linkAddrCommands}
+
+            # attach interfaces to bridges
+            ${concatNonEmpty linkBridgeCommands}
+
+            # set bridges up
+            ${lib.concatStringsSep "\n" bridgeUpCommands}
 
             # set interfaces up
             ${lib.concatStringsSep "\n" (nsLoUpCommands ++ linkIfUpCommands)}
@@ -720,7 +755,7 @@
               lib.filter (s: s != "") (
                 [
                   linkName
-                  node.ipv4
+                  (lib.optionalString (node.ipv4 != null) node.ipv4)
                 ]
                 ++ lib.optionals (netemCfg != null) (
                   lib.filter (s: s != "") [
