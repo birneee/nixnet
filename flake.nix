@@ -362,7 +362,7 @@
           mkCdNs =
             nsCfg:
             lib.optionalString (nsCfg.workDir != null)
-              "\${SUDO_USER:+runuser -u \"$SUDO_USER\" --} mkdir -p '${nsCfg.workDir}'\n  cd '${nsCfg.workDir}'";
+              "\${SUDO_UID:+setpriv --reuid=\"\$SUDO_UID\" --regid=\"\$SUDO_GID\" --clear-groups --} mkdir -p '${nsCfg.workDir}'\n  cd '${nsCfg.workDir}'";
 
           # Runtime dependencies of the generated testbed binary.
           # Also included in every script's PATH via mkScriptArg.
@@ -561,7 +561,7 @@
                       "  set +m"
                       (lib.optionalString (cdNs != "") "  ${cdNs}")
                       "  _PATH=\"${scriptPath}${lib.optionalString tb.inheritPath ":$PATH"}\""
-                      "  stdbuf -oL ip netns exec ${name} \${SUDO_USER:+runuser -u \"$SUDO_USER\" --} ${mkBwrapPrefix nsCfg scriptCfg} \"$_ENV\" PATH=\"$_PATH\" \"$_BASH\" -c ${script} ${toOutput}"
+                      "  stdbuf -oL ip netns exec ${name} \${SUDO_UID:+setpriv --reuid=\"\$SUDO_UID\" --regid=\"\$SUDO_GID\" --clear-groups --} ${mkBwrapPrefix nsCfg scriptCfg} \"$_ENV\" PATH=\"$_PATH\" \"$_BASH\" -c ${script} ${toOutput}"
                       ") &"
                       "echo \"${name}| PID $! started\""
                       "PIDS+=($!)"
@@ -591,7 +591,7 @@
                       "("
                       (lib.optionalString (cdNs != "") "  ${cdNs}")
                       "  _PATH=\"${scriptPath}${lib.optionalString tb.inheritPath ":$PATH"}\""
-                      "  ip netns exec ${name} \${SUDO_USER:+runuser -u \"$SUDO_USER\" --} ${mkBwrapPrefix nsCfg scriptCfg} \"$_ENV\" PATH=\"$_PATH\" \"$_BASH\" -c ${script}"
+                      "  ip netns exec ${name} \${SUDO_UID:+setpriv --reuid=\"\$SUDO_UID\" --regid=\"\$SUDO_GID\" --clear-groups --} ${mkBwrapPrefix nsCfg scriptCfg} \"$_ENV\" PATH=\"$_PATH\" \"$_BASH\" -c ${script}"
                       ")"
                       "echo \"${name}| end foreground script\""
                     ]
@@ -606,6 +606,18 @@
           excludeShellChecks = [ "SC2016" ]; # $PATH in bash -c single-quoted arg is intentional
           text = ''
             export PATH="${lib.makeBinPath runtimeDeps}${lib.optionalString tb.inheritPath ":$PATH"}"
+
+            if [ -z "''${_TESTBED_CLEAN_ENV+x}" ]; then
+              exec env -i \
+                _TESTBED_CLEAN_ENV=1 \
+                SUDO_UID="''${SUDO_UID:-}" \
+                SUDO_GID="''${SUDO_GID:-}" \
+                DISPLAY="''${DISPLAY:-}" \
+                XAUTHORITY="''${XAUTHORITY:-}" \
+                WAYLAND_DISPLAY="''${WAYLAND_DISPLAY:-}" \
+                DBUS_SESSION_BUS_ADDRESS="''${DBUS_SESSION_BUS_ADDRESS:-}" \
+                "''${BASH_SOURCE[0]}" "$@"
+            fi
 
             if [ "$EUID" -ne 0 ]; then echo "testbed| Error: Run as root"; exit 1; fi
 
@@ -662,7 +674,7 @@
               fi
             ''}
             ${lib.optionalString (workDir != null) ''
-              ''${SUDO_USER:+runuser -u "$SUDO_USER" --} mkdir -p "$_WORK_DIR"
+              ''${SUDO_UID:+setpriv --reuid="$SUDO_UID" --regid="$SUDO_GID" --clear-groups --} mkdir -p "$_WORK_DIR"
               cd "$_WORK_DIR"
             ''}
             
