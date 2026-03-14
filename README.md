@@ -95,7 +95,7 @@ nixnet is designed for lightweight, reproducible experiments that run real appli
 | `workDir` | `str \| null` | `null` | Working directory for the testbed. Created if absent. If the path contains `{}`, it is replaced at runtime with a two-digit zero-padded run index (default `00`), e.g. `"./out/{}"` with `sudo nix run . -- 5` uses `./out/05`. Pass a range to run multiple times: `sudo nix run . -- 1-5`. |
 | `workDirEnsureEmpty` | `bool` | `false` | Abort if `workDir` is non-empty, preventing results from being overwritten. |
 | `stdout` | `bool` | `true` | Print script output to the console, prefixed with the namespace name. Can be overridden per namespace. |
-| `disableIpv6` | `bool` | `false` | Disable IPv6 in all namespaces. Can be overridden per namespace. |
+| `sysctl` | `attrs` | `{}` | Sysctl settings applied in all namespaces. Same type as NixOS `boot.kernel.sysctl`. Can be overridden per namespace. |
 | `arp` | `bool` | `true` | Enable ARP on all interfaces. Can be overridden per link or per endpoint. |
 | `arpPrefill` | `bool` | `false` | Prefill ARP tables with peer MAC addresses at startup. Can be overridden per link or per endpoint. |
 | `sandbox` | `bool` | `true` | Sandbox all scripts with bubblewrap: read-only filesystem access, write access limited to the script's working directory, isolated PID/UTS/IPC namespaces, cleared environment. Can be overridden per namespace or per script. |
@@ -109,9 +109,6 @@ nixnet is designed for lightweight, reproducible experiments that run real appli
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `ipv4Forward` | `bool` | `false` | Enable IPv4 forwarding. |
-| `disableIpv6` | `bool \| null` | `null` | Disable IPv6. Overrides top-level `disableIpv6`. |
-| `ipUnprivilegedPortStart` | `int` | `0` | Lowest port number that unprivileged users can bind to (`net.ipv4.ip_unprivileged_port_start`). |
 | `defaultRoute` | `str \| null` | `null` | Default route gateway. |
 | `routes` | `list` | `[]` | Static routes: `[{ subnet = "..."; via = "..."; }]`. |
 | `packages` | `list` | `[]` | Packages prepended to PATH for all scripts in this namespace. |
@@ -119,6 +116,9 @@ nixnet is designed for lightweight, reproducible experiments that run real appli
 | `stdout` | `bool \| null` | `null` | Print script output to the console. Overrides top-level `stdout`. |
 | `workDir` | `str \| null` | `null` | Working directory for all scripts in this namespace. Relative to the testbed `workDir` if not absolute. |
 | `sandbox` | `bool \| null` | `null` | Sandbox all scripts in this namespace with bubblewrap. Overrides top-level `sandbox`. |
+| `sysctl` | `attrs` | `{}` | Sysctl settings for this namespace. Same type as NixOS `boot.kernel.sysctl`. Merged with top-level `sysctl`; namespace values take precedence. Set a key to `null` to suppress a top-level default. |
+| `preSetup` | `str` | `""` | Shell code to run inside this namespace after it is created. Runs after testbed `preSetup`, before links and routes are configured. Runs as root. |
+| `postSetup` | `str` | `""` | Shell code to run inside this namespace after routing is configured. Runs before testbed `postSetup`. Runs as root. |
 
 ### Script options
 
@@ -167,7 +167,7 @@ netem can be set at the link level or per endpoint. Endpoint fields override lin
 
 The testbed runs in two phases:
 
-1. **Setup** — creates network namespaces, veth pairs, assigns addresses, brings interfaces up, configures MTU, ARP, netem, and routes. Hook: `preSetup` / `postSetup`.
+1. **Setup** — creates network namespaces, applies sysctl settings, creates veth pairs, assigns addresses, brings interfaces up, configures MTU, ARP, netem, and routes. Hook: `preSetup` / `postSetup`.
 2. **Run** — launches all background scripts in parallel, then foreground scripts sequentially. Waits for scripts with `await = true` before exiting. Hook: `preRun` / `postRun`.
 
 Cleanup (SIGINT to all child processes, namespace deletion) runs automatically on exit regardless of which phase it occurs in.

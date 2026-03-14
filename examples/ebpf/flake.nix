@@ -1,7 +1,7 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    nixnet.url = "github:birneee/nixnet";
+    nixnet.url = "path:../..";
     starlink.url = "github:birneee/simple-starlink-ebpf";
   };
   outputs =
@@ -19,17 +19,23 @@
           iperf3
         ];
         namespaces = {
-          client.scripts = [
-            {
-              exec = "sleep 0.1; iperf3 -c 10.0.0.2 -t 30 --forceflush";
-              await = true;
-            }
-          ];
-          server.scripts = [
-            {
-              exec = "iperf3 -s";
-            }
-          ];
+          client = {
+            postSetup = "ip link set dev veth0 xdp obj ${starlink}/starlink.o sec xdp";
+            scripts = [
+              {
+                exec = "sleep 0.1; iperf3 -c 10.0.0.2 -t 30 --forceflush";
+                await = true;
+              }
+            ];
+          };
+          server = {
+            postSetup = "ip link set dev veth0 xdp obj ${starlink}/starlink.o sec xdp";
+            scripts = [
+              {
+                exec = "iperf3 -s";
+              }
+            ];
+          };
         };
         links.veth0 = {
           netem.delayMs = 40;
@@ -42,10 +48,6 @@
             ipv4 = "10.0.0.2/24";
           };
         };
-        postSetup = ''
-          ip netns exec client ip link set dev veth0 xdp obj ${starlink}/starlink.o sec xdp
-          ip netns exec server ip link set dev veth0 xdp obj ${starlink}/starlink.o sec xdp
-        '';
       };
     };
 }

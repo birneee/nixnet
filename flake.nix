@@ -76,21 +76,6 @@
             type = lib.types.attrsOf (
               lib.types.submodule {
                 options = {
-                  ipv4Forward = lib.mkOption {
-                    type = lib.types.bool;
-                    default = false;
-                    description = "Enable IPv4 forwarding in this namespace.";
-                  };
-                  disableIpv6 = lib.mkOption {
-                    type = lib.types.nullOr lib.types.bool;
-                    default = null;
-                    description = "Disable IPv6 in this namespace. Overrides top-level disableIpv6.";
-                  };
-                  ipUnprivilegedPortStart = lib.mkOption {
-                    type = lib.types.int;
-                    default = 0;
-                    description = "Lowest port number that unprivileged users can bind to (net.ipv4.ip_unprivileged_port_start).";
-                  };
                   defaultRoute = lib.mkOption {
                     type = lib.types.nullOr lib.types.str;
                     default = null;
@@ -164,6 +149,25 @@
                     default = null;
                     description = "Sandbox all scripts in this namespace with bubblewrap. Overrides top-level sandbox.";
                   };
+                  sysctl = lib.mkOption {
+                    type = lib.types.attrsOf (lib.types.nullOr (lib.types.oneOf [
+                      lib.types.int
+                      lib.types.str
+                      lib.types.bool
+                    ]));
+                    default = { };
+                    description = "Sysctl settings to apply in this namespace (key = value). Same type as NixOS boot.kernel.sysctl.";
+                  };
+                  preSetup = lib.mkOption {
+                    type = lib.types.str;
+                    default = "";
+                    description = "Shell code to run inside this namespace after namespace is created. Runs after testbed preSetup. Runs as root.";
+                  };
+                  postSetup = lib.mkOption {
+                    type = lib.types.str;
+                    default = "";
+                    description = "Shell code to run inside this namespace before testbed postSetup. Runs as root.";
+                  };
                 };
               }
             );
@@ -208,11 +212,6 @@
             description = "Bridges to create. Each bridge gets its own network namespace of the same name.";
           };
 
-          disableIpv6 = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-            description = "Disable IPv6 in all namespaces. Can be overridden per namespace.";
-          };
           stdout = lib.mkOption {
             type = lib.types.bool;
             default = true;
@@ -247,6 +246,15 @@
             type = lib.types.bool;
             default = true;
             description = "Sandbox all scripts with bubblewrap: read-only filesystem, write access limited to workDir. Can be overridden per namespace or per script.";
+          };
+          sysctl = lib.mkOption {
+            type = lib.types.attrsOf (lib.types.nullOr (lib.types.oneOf [
+              lib.types.int
+              lib.types.str
+              lib.types.bool
+            ]));
+            default = { };
+            description = "Sysctl settings to apply in all namespaces. Can be overridden per namespace.";
           };
           inheritPath = lib.mkOption {
             type = lib.types.bool;
@@ -395,33 +403,53 @@
             "NETNS+=(${name})"
           ]) (lib.attrNames namespaces ++ tb.bridges);
 
-          # Set ping group range
-          nsPingGroupRangeCommands = lib.mapAttrsToList (
-            name: _: "ip netns exec ${name} sysctl -w net.ipv4.ping_group_range=\"0 2147483647\" > /dev/null"
-          ) namespaces;
-
           # Bring loopback interfaces up
           nsLoUpCommands = lib.mapAttrsToList (name: _: "ip netns exec ${name} ip link set lo up") namespaces;
 
-          # Disable IPv6
-          nsDisableIpv6Commands = lib.mapAttrsToList (
+          nsPreSetupCommands = lib.mapAttrsToList (
             name: nsCfg:
-            lib.optionalString (resolve2 "disableIpv6" nsCfg
-              tb
-            ) "ip netns exec ${name} sysctl -w net.ipv6.conf.all.disable_ipv6=1 > /dev/null"
+            lib.optionalString (nsCfg.preSetup != "") ''
+              ip netns exec ${name} bash -c ${lib.escapeShellArg nsCfg.preSetup}
+            ''
           ) namespaces;
 
-          # Set ip_unprivileged_port_start
-          nsUnprivilegedPortStartCommands = lib.mapAttrsToList (
+          nsPostSetupCommands = lib.mapAttrsToList (
             name: nsCfg:
-            "ip netns exec ${name} sysctl -w net.ipv4.ip_unprivileged_port_start=${toString nsCfg.ipUnprivilegedPortStart} > /dev/null"
+            lib.optionalString (nsCfg.postSetup != "") ''
+              ip netns exec ${name} bash -c ${lib.escapeShellArg nsCfg.postSetup}
+            ''
           ) namespaces;
 
-          # Enable IPv4 forwarding
-          nsForwardCommands = lib.mapAttrsToList (
-            name: nsCfg:
-            lib.optionalString nsCfg.ipv4Forward "ip netns exec ${name} sysctl -w net.ipv4.ip_forward=1 | sed 's/^/${name}| /'"
-          ) namespaces;
+          # Testbed-level sysctl defaults (lowest priority, can be overridden via tb.sysctl or ns.sysctl)
+          tbSysctlDefaults = {
+            "net.ipv4.ping_group_range" = "0 2147483647";
+            "net.ipv4.ip_unprivileged_port_start" = 0;
+          };
+
+          # Apply sysctl per namespace: tbSysctlDefaults < tb.sysctl < ns.sysctl
+          nsSysctlCommands = lib.concatLists (
+            lib.mapAttrsToList (
+              name: nsCfg:
+              let
+                merged = tbSysctlDefaults // tb.sysctl // nsCfg.sysctl;
+              in
+              lib.mapAttrsToList (
+                key: value:
+                lib.optionalString (value != null) (
+                  let
+                    rendered =
+                      if builtins.isBool value then
+                        (if value then "1" else "0")
+                      else if builtins.isString value then
+                        "\"${value}\""
+                      else
+                        toString value;
+                  in
+                  "ip netns exec ${name} sysctl -w ${key}=${rendered} > /dev/null"
+                )
+              ) merged
+            ) namespaces
+          );
 
           # Build a tc netem command string from a resolved netem config and interface.
           mkNetemCmd =
@@ -684,17 +712,11 @@
             # create namespaces
             ${lib.concatStringsSep "\n" nsCreateCommands}
 
-            # set ping group range
-            ${lib.concatStringsSep "\n" nsPingGroupRangeCommands}
+            # namespace pre-setup hooks
+            ${concatNonEmpty nsPreSetupCommands}
 
-            # disable ipv6
-            ${concatNonEmpty nsDisableIpv6Commands}
-
-            # set unprivileged port start
-            ${lib.concatStringsSep "\n" nsUnprivilegedPortStartCommands}
-
-            # enable ip_forward
-            ${concatNonEmpty nsForwardCommands}
+            # sysctl settings
+            ${concatNonEmpty nsSysctlCommands}
 
             # create bridges
             ${lib.concatStringsSep "\n" bridgeAddCommands}
@@ -729,10 +751,13 @@
             # configure routing
             ${concatNonEmpty routeCommands}
 
-            echo "testbed| network topology & routing established"
+            # namespace post-setup hooks
+            ${concatNonEmpty nsPostSetupCommands}
 
             # post-setup hook
             ${tb.postSetup}
+
+            echo "testbed| network topology set up"
 
             # pre-run hook
             ${tb.preRun}

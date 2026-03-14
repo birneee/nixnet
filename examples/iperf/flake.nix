@@ -44,7 +44,7 @@
                 workDir = "./client";
               };
               ns-router = {
-                ipv4Forward = true;
+                sysctl."net.ipv4.ip_forward" = true;
               };
               ns-server = {
                 routes = [
