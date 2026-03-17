@@ -2,7 +2,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
-    nixnet.url = "path:../..";
+    nixnet.url = "github:birneee/nixnet";
   };
 
   outputs =

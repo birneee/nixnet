@@ -1,7 +1,7 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    nixnet.url = "path:../..";
+    nixnet.url = "github:birneee/nixnet";
     starlink.url = "github:birneee/simple-starlink-ebpf";
   };
   outputs =
