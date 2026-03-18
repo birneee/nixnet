@@ -10,6 +10,13 @@
       mkTestbedOptions =
         lib:
         let
+          nixosSysctl =
+            (lib.evalModules {
+              modules = [
+                "${nixpkgs}/nixos/modules/config/sysctl.nix"
+                { _module.check = false; }
+              ];
+            }).options.boot.kernel.sysctl;
           netem = lib.types.submodule {
             options = {
               delayMs = lib.mkOption {
@@ -41,9 +48,14 @@
           };
           iface = lib.types.submodule {
             options = {
-              ns = lib.mkOption { type = lib.types.str; description = "Namespace or bridge to link."; };
+              ns = lib.mkOption {
+                type = lib.types.str;
+                description = "Namespace or bridge to link.";
+              };
               ipv4 = lib.mkOption {
-                type = lib.types.nullOr (lib.types.strMatching "([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[1-2][0-9]|3[0-2])");
+                type = lib.types.nullOr (
+                  lib.types.strMatching "([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[1-2][0-9]|3[0-2])"
+                );
                 default = null;
                 description = "IPv4 address with prefix length, e.g. \"10.0.0.1/24\".";
               };
@@ -150,13 +162,8 @@
                     description = "Sandbox all scripts in this namespace with bubblewrap. Overrides top-level sandbox.";
                   };
                   sysctl = lib.mkOption {
-                    type = lib.types.attrsOf (lib.types.nullOr (lib.types.oneOf [
-                      lib.types.int
-                      lib.types.str
-                      lib.types.bool
-                    ]));
-                    default = { };
-                    description = "Sysctl settings to apply in this namespace (key = value). Same type as NixOS boot.kernel.sysctl.";
+                    inherit (nixosSysctl) type default example;
+                    description = nixosSysctl.description + " Same type as NixOS boot.kernel.sysctl.";
                   };
                   preSetup = lib.mkOption {
                     type = lib.types.str;
@@ -248,13 +255,10 @@
             description = "Sandbox all scripts with bubblewrap: read-only filesystem, write access limited to workDir. Can be overridden per namespace or per script.";
           };
           sysctl = lib.mkOption {
-            type = lib.types.attrsOf (lib.types.nullOr (lib.types.oneOf [
-              lib.types.int
-              lib.types.str
-              lib.types.bool
-            ]));
-            default = { };
-            description = "Sysctl settings to apply in all namespaces. Can be overridden per namespace.";
+            inherit (nixosSysctl) type default example;
+            description =
+              nixosSysctl.description
+              + " Same type as NixOS boot.kernel.sysctl. Can be overridden per namespace.";
           };
           inheritPath = lib.mkOption {
             type = lib.types.bool;
@@ -398,10 +402,13 @@
           hasTemplate = workDir != null && lib.hasInfix "{}" workDir;
 
           # Create namespaces (including bridge namespaces)
-          nsCreateCommands = map (name: lib.concatStringsSep "\n" [
-            "ip netns add ${name}"
-            "NETNS+=(${name})"
-          ]) (lib.attrNames namespaces ++ tb.bridges);
+          nsCreateCommands = map (
+            name:
+            lib.concatStringsSep "\n" [
+              "ip netns add ${name}"
+              "NETNS+=(${name})"
+            ]
+          ) (lib.attrNames namespaces ++ tb.bridges);
 
           # Bring loopback interfaces up
           nsLoUpCommands = lib.mapAttrsToList (name: _: "ip netns exec ${name} ip link set lo up") namespaces;
@@ -491,13 +498,14 @@
 
           # Assign IP addresses
           linkAddrCommands = mkLinkPairCmds (
-            linkName: iface: lib.optionalString (iface.ipv4 != null) "${execNs iface.ns}ip addr add ${iface.ipv4} dev ${linkName}"
+            linkName: iface:
+            lib.optionalString (
+              iface.ipv4 != null
+            ) "${execNs iface.ns}ip addr add ${iface.ipv4} dev ${linkName}"
           );
 
           # Bring link interfaces up
-          linkIfUpCommands = mkLinkPairCmds (
-            linkName: iface: "${execNs iface.ns}ip link set ${linkName} up"
-          );
+          linkIfUpCommands = mkLinkPairCmds (linkName: iface: "${execNs iface.ns}ip link set ${linkName} up");
 
           # Attach interfaces to bridge
           linkBridgeCommands = mkLinkPairCmds (
@@ -540,7 +548,8 @@
               arpPrefillB = resolveArpPrefill linkCfg linkCfg.b;
               nsA = execNs linkCfg.a.ns;
               nsB = execNs linkCfg.b.ns;
-              mkPrefill = nsLocal: nsPeer: peerIpv4:
+              mkPrefill =
+                nsLocal: nsPeer: peerIpv4:
                 "_MAC=$(${nsPeer}cat /sys/class/net/${linkName}/address)\n${nsLocal}ip neigh add ${ipv4RemovePrefix peerIpv4} lladdr \"$_MAC\" dev ${linkName}";
             in
             concatNonEmpty [
@@ -561,14 +570,12 @@
           ) namespaces;
 
           # Create bridge devices inside their namespaces.
-          bridgeAddCommands = map (brName:
-            "ip netns exec ${brName} ip link add ${brName} type bridge stp_state 0"
+          bridgeAddCommands = map (
+            brName: "ip netns exec ${brName} ip link add ${brName} type bridge stp_state 0"
           ) tb.bridges;
 
           # Set bridges to up
-          bridgeUpCommands = map (brName:
-            "ip netns exec ${brName} ip link set ${brName} up"
-          ) tb.bridges;
+          bridgeUpCommands = map (brName: "ip netns exec ${brName} ip link set ${brName} up") tb.bridges;
 
           # Launch scripts in parallel; mark awaited ones; skip foreground scripts
           launchScripts = lib.concatLists (
@@ -705,7 +712,7 @@
               ''${SUDO_UID:+setpriv --reuid="$SUDO_UID" --regid="$SUDO_GID" --clear-groups --} mkdir -p "$_WORK_DIR"
               cd "$_WORK_DIR"
             ''}
-            
+
             # pre-setup hook
             ${tb.preSetup}
 
@@ -856,20 +863,30 @@
             in
             buildTestbed pkgs evaluated.config;
 
-          legacyPackages.mkMermaid =
-            networkConfig:
-            let
-              lib = pkgs.lib;
-              evaluated = lib.evalModules {
-                modules = [
-                  {
-                    options = mkTestbedOptions lib;
-                    config = networkConfig;
-                  }
-                ];
-              };
-            in
-            buildMermaid lib evaluated.config;
+          legacyPackages = {
+            options =
+              let
+                lib = pkgs.lib;
+              in
+              (lib.evalModules {
+                modules = [ { options = mkTestbedOptions lib; } ];
+              }).options;
+
+            mkMermaid =
+              networkConfig:
+              let
+                lib = pkgs.lib;
+                evaluated = lib.evalModules {
+                  modules = [
+                    {
+                      options = mkTestbedOptions lib;
+                      config = networkConfig;
+                    }
+                  ];
+                };
+              in
+              buildMermaid lib evaluated.config;
+          };
         };
     };
 }
