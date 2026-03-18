@@ -202,6 +202,20 @@ watchexec -e nix -- 'nix eval --raw .#legacyPackages.x86_64-linux.mermaid | mmdc
 - nixnet mermaid --watch
 - better IPv6 support
 
+## LSP Configuration
+
+For option documentation and completions with [nixd](https://github.com/nix-community/nixd/blob/main/nixd/docs/configuration.md), add the following to your nixd settings:
+
+```json
+{
+  "options": {
+    "nixnet": {
+      "expr": "(builtins.getFlake (toString ./.)).inputs.nixnet.legacyPackages.x86_64-linux.options"
+    }
+  }
+}
+```
+
 ## Contributing
 
 Contributions are welcome! Feel free to open issues or pull requests.
