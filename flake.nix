@@ -8,15 +8,110 @@
     inputs@{ nixpkgs, flake-parts, ... }:
     let
       mkTestbedOptions =
-        lib:
+        pkgs:
         let
-          nixosSysctl =
+          lib = pkgs.lib;
+          nixosKernelOpts =
             (lib.evalModules {
               modules = [
                 "${nixpkgs}/nixos/modules/config/sysctl.nix"
                 { _module.check = false; }
               ];
-            }).options.boot.kernel.sysctl;
+            }).options.boot.kernel;
+          nixosNetworkingOpts =
+            let
+              utils = import "${nixpkgs}/nixos/lib/utils.nix" {
+                inherit lib pkgs;
+                config = { };
+              };
+            in
+            (lib.evalModules {
+              modules = [
+                "${nixpkgs}/nixos/modules/tasks/network-interfaces.nix"
+                { _module.check = false; }
+              ];
+              specialArgs = { inherit utils pkgs; };
+            }).options.networking;
+
+          # Build a submodule options attrset from a spec tree mixed with NixOS options.
+          # nixosRoot: dot-path prefix for the context (e.g. "networking"), used in description suffix.
+          # ctx: NixOS options namespace (e.g. evaluated.options.networking).
+          # spec: attrset tree where each value is one of:
+          #   null            — inherit this option (description/type/default/example) from NixOS
+          #   lib.mkOption {} — use this custom option as-is
+          #   { "<name>" = subSpec; } — attrsOf keyed-by-name submodule; subSpec is the per-item spec
+          #   other attrset   — recurse into NixOS submodule/namespace with this sub-spec
+          inheritFromNixpkgs =
+            nixosRoot: ctx: spec:
+            let
+              isOpt = x: x ? _type && x._type == "option";
+
+              getSubOptions =
+                nixosPath: type:
+                if type ? getSubOptions then
+                  type.getSubOptions [ ]
+                else if type ? nestedTypes.elemType.getSubOptions then
+                  type.nestedTypes.elemType.getSubOptions [ ]
+                else
+                  throw "inheritFromNixpkgs: cannot get sub-options of '${nixosPath}' (type: ${type.name or "unknown"})";
+
+              build =
+                pathSegs: context: specNode:
+                lib.mapAttrs (
+                  key: val:
+                  let
+                    nixosPath = lib.concatStringsSep "." (pathSegs ++ [ key ]);
+                    nixosSuffix = " Same type as NixOS ${nixosPath}.";
+                    child = context.${key};
+                  in
+                  if isOpt val then
+                    val
+                  else if val == null then
+                    lib.mkOption (
+                      {
+                        description = (child.description or "") + nixosSuffix;
+                        type = child.type or lib.types.unspecified;
+                      }
+                      // lib.optionalAttrs (child ? default) { inherit (child) default; }
+                      // lib.optionalAttrs (child ? example) { inherit (child) example; }
+                    )
+                  else if val ? "<name>" then
+                    lib.mkOption {
+                      description = (child.description or "") + nixosSuffix;
+                      default = { };
+                      type = lib.types.attrsOf (
+                        lib.types.submodule {
+                          options = build (
+                            pathSegs
+                            ++ [
+                              key
+                              "<name>"
+                            ]
+                          ) (getSubOptions nixosPath child.type) val."<name>";
+                        }
+                      );
+                    }
+                  else if isOpt child then
+                    lib.mkOption {
+                      description = (child.description or "") + nixosSuffix;
+                      default = { };
+                      type = lib.types.submodule {
+                        options = build (pathSegs ++ [ key ]) (getSubOptions nixosPath child.type) val;
+                      };
+                    }
+                  else
+                    lib.mkOption {
+                      default = { };
+                      type = lib.types.submodule {
+                        options = build (pathSegs ++ [ key ]) child val;
+                      };
+                    }
+                ) specNode;
+            in
+            build [ nixosRoot ] ctx spec;
+
+          nixosSysctlOption = (inheritFromNixpkgs "boot.kernel" nixosKernelOpts { sysctl = null; }).sysctl;
+
           netem = lib.types.submodule {
             options = {
               delayMs = lib.mkOption {
@@ -50,35 +145,30 @@
             options = {
               ns = lib.mkOption {
                 type = lib.types.str;
-                description = "Namespace or bridge to link.";
+                description = "Namespace or bridge for this endpoint.";
               };
-              ipv4 = lib.mkOption {
-                type = lib.types.nullOr (
-                  lib.types.strMatching "([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[1-2][0-9]|3[0-2])"
-                );
-                default = null;
-                description = "IPv4 address with prefix length, e.g. \"10.0.0.1/24\".";
+              iface = lib.mkOption {
+                type = lib.types.str;
+                description = "Interface name within the namespace.";
               };
-              mtu = lib.mkOption {
-                type = lib.types.int;
-                default = 1500;
-                description = "MTU for this interface.";
-              };
-              netem = lib.mkOption {
-                default = null;
-                description = "netem traffic shaping parameters. Overrides link-level netem.";
-                type = lib.types.nullOr netem;
-              };
-              arp = lib.mkOption {
-                type = lib.types.nullOr lib.types.bool;
-                default = null;
-                description = "Enable ARP on this interface. Overrides link-level and top-level arp.";
-              };
-              arpPrefill = lib.mkOption {
-                type = lib.types.nullOr lib.types.bool;
-                default = null;
-                description = "Prefill ARP table with the peer's MAC address. Overrides link-level and top-level arpPrefill.";
-              };
+            };
+          };
+          # Per-interface options added to networking.interfaces.<name>.
+          ifaceOptions = {
+            netem = lib.mkOption {
+              type = lib.types.nullOr netem;
+              default = null;
+              description = "netem traffic shaping parameters. Overrides veth-level netem.";
+            };
+            arp = lib.mkOption {
+              type = lib.types.nullOr lib.types.bool;
+              default = null;
+              description = "Enable ARP on this interface. Overrides veth-level and top-level arp.";
+            };
+            arpPrefill = lib.mkOption {
+              type = lib.types.nullOr lib.types.bool;
+              default = null;
+              description = "Prefill ARP table with the peer's MAC address. Overrides veth-level and top-level arpPrefill.";
             };
           };
         in
@@ -88,25 +178,6 @@
             type = lib.types.attrsOf (
               lib.types.submodule {
                 options = {
-                  defaultRoute = lib.mkOption {
-                    type = lib.types.nullOr lib.types.str;
-                    default = null;
-                    description = "Default route gateway for this namespace.";
-                  };
-                  routes = lib.mkOption {
-                    default = [ ];
-                    type = lib.types.listOf (
-                      lib.types.submodule {
-                        options = {
-                          subnet = lib.mkOption {
-                            type = lib.types.strMatching "(default|([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[1-2][0-9]|3[0-2]))";
-                            description = "Destination subnet as IPv4 CIDR or \"default\".";
-                          };
-                          via = lib.mkOption { type = lib.types.str; };
-                        };
-                      }
-                    );
-                  };
                   packages = lib.mkOption {
                     type = lib.types.listOf lib.types.package;
                     default = [ ];
@@ -161,9 +232,24 @@
                     default = null;
                     description = "Sandbox all scripts in this namespace with bubblewrap. Overrides top-level sandbox.";
                   };
-                  sysctl = lib.mkOption {
-                    inherit (nixosSysctl) type default example;
-                    description = nixosSysctl.description + " Same type as NixOS boot.kernel.sysctl.";
+                  sysctl = nixosSysctlOption;
+                  networking = lib.mkOption {
+                    default = { };
+                    description = "Network interface configuration. Compatible with NixOS networking.";
+                    type = lib.types.submodule {
+                      options = inheritFromNixpkgs "networking" nixosNetworkingOpts {
+                        defaultGateway = null;
+                        defaultGateway6 = null;
+                        interfaces."<name>" = {
+                          ipv4.addresses = null;
+                          ipv4.routes = null;
+                          ipv6.addresses = null;
+                          ipv6.routes = null;
+                          mtu = null;
+                        }
+                        // ifaceOptions;
+                      };
+                    };
                   };
                   preSetup = lib.mkOption {
                     type = lib.types.str;
@@ -180,37 +266,38 @@
             );
           };
 
-          links = lib.mkOption {
-            default = { };
-            type = lib.types.attrsOf (
+          veths = lib.mkOption {
+            default = [ ];
+            type = lib.types.listOf (
               lib.types.submodule {
                 options = {
                   netem = lib.mkOption {
                     type = lib.types.nullOr netem;
                     default = null;
-                    description = "netem traffic shaping parameters applied to both interfaces. Individual fields can be overridden per interface.";
+                    description = "netem traffic shaping parameters applied to both endpoints. Individual fields can be overridden per interface via networking.interfaces.";
                   };
                   arp = lib.mkOption {
                     type = lib.types.nullOr lib.types.bool;
                     default = null;
-                    description = "Enable ARP for all interfaces on this link. Overrides top-level arp.";
+                    description = "Enable ARP for both endpoints of this veth pair. Overrides top-level arp.";
                   };
                   arpPrefill = lib.mkOption {
                     type = lib.types.nullOr lib.types.bool;
                     default = null;
-                    description = "Prefill ARP table for all interfaces on this link. Overrides top-level arpPrefill.";
+                    description = "Prefill ARP table for both endpoints of this veth pair. Overrides top-level arpPrefill.";
                   };
                   a = lib.mkOption {
                     type = iface;
-                    description = "First interface endpoint of this veth pair.";
+                    description = "First endpoint of this veth pair.";
                   };
                   b = lib.mkOption {
                     type = iface;
-                    description = "Second interface endpoint of this veth pair.";
+                    description = "Second endpoint of this veth pair.";
                   };
                 };
               }
             );
+            description = "veth pairs to create between namespaces.";
           };
 
           bridges = lib.mkOption {
@@ -234,6 +321,11 @@
             default = false;
             description = "Global default arpPrefill setting for all interfaces.";
           };
+          mtu = lib.mkOption {
+            type = lib.types.nullOr lib.types.int;
+            default = null;
+            description = "Global default MTU for all veth interfaces. Can be overridden per interface via networking.interfaces.";
+          };
           workDir = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
             default = null;
@@ -254,11 +346,8 @@
             default = true;
             description = "Sandbox all scripts with bubblewrap: read-only filesystem, write access limited to workDir. Can be overridden per namespace or per script.";
           };
-          sysctl = lib.mkOption {
-            inherit (nixosSysctl) type default example;
-            description =
-              nixosSysctl.description
-              + " Same type as NixOS boot.kernel.sysctl. Can be overridden per namespace.";
+          sysctl = nixosSysctlOption // {
+            description = nixosSysctlOption.description + " Can be overridden per namespace.";
           };
           inheritPath = lib.mkOption {
             type = lib.types.bool;
@@ -292,72 +381,88 @@
           };
         };
 
-      ipv4RemovePrefix = cidr: builtins.head (builtins.split "/" cidr);
-
-      # Pick the first non-null value for `field` across two or three attrsets (highest priority first).
-      resolve2 =
-        field: a: b:
-        if a.${field} != null then a.${field} else b.${field};
-      resolve3 =
-        field: a: b: c:
-        if a.${field} != null then
-          a.${field}
-        else if b.${field} != null then
-          b.${field}
-        else
-          c.${field};
+      # Pick the first non-null element from a priority-ordered list.
+      firstNonNull = builtins.foldl' (acc: x: if acc != null then acc else x) null;
+      # Pick the first non-null value for `field` from a priority-ordered list of attrsets (nulls in the list are skipped).
+      resolveFirst =
+        field: sources:
+        firstNonNull (map (src: if src == null then null else src.${field} or null) sources);
 
       # Merge two netem configs field-by-field: interface fields override link fields.
       resolveNetem =
-        linkCfg: node:
+        linkNetem: ifaceNetem:
         let
-          l = linkCfg.netem;
-          n = node.netem;
+          template = if ifaceNetem != null then ifaceNetem else linkNetem;
         in
-        if l == null && n == null then
+        if template == null then
           null
         else
           builtins.mapAttrs (
             f: _:
-            if n != null && n.${f} != null then
-              n.${f}
-            else if l != null then
-              l.${f}
-            else
-              null
-          ) (if n != null then n else l);
+            firstNonNull [
+              (ifaceNetem.${f} or null)
+              (linkNetem.${f} or null)
+            ]
+          ) template;
 
       buildTestbed =
         pkgs: tb:
         let
           lib = pkgs.lib;
           namespaces = tb.namespaces;
-          links = tb.links;
+          veths = tb.veths;
           workDir = tb.workDir;
           workDirEnsureEmpty = tb.workDirEnsureEmpty;
           name = tb.name;
 
-          resolveArp = linkCfg: node: resolve3 "arp" node linkCfg tb;
-          resolveArpPrefill = linkCfg: node: resolve3 "arpPrefill" node linkCfg tb;
+          # Look up the interface config for a veth endpoint from its namespace, or null if absent.
+          getNsIface =
+            node:
+            if namespaces ? ${node.ns} && namespaces.${node.ns}.networking.interfaces ? ${node.iface} then
+              namespaces.${node.ns}.networking.interfaces.${node.iface}
+            else
+              null;
 
           execNs = ns: lib.optionalString (ns != null) "ip netns exec ${ns} ";
 
           # Join non-empty strings with newlines.
           concatNonEmpty = strs: lib.concatStringsSep "\n" (lib.filter (s: s != "") strs);
 
-          # Generate two shell commands for both ends (a and b) of a link.
-          mkLinkPairCmds =
+          # Emit a commented bash section only when lines is non-empty.
+          mkBashSection =
+            title: lines:
+            let
+              content = concatNonEmpty lines;
+            in
+            lib.optionalString (content != "") "# ${title}\n${content}";
+
+          # Generate two shell commands for both endpoints of a veth.
+          mkVethPairCmds =
             f:
-            lib.mapAttrsToList (
-              linkName: linkCfg:
+            map (
+              veth:
               concatNonEmpty [
-                (f linkName linkCfg.a)
-                (f linkName linkCfg.b)
+                (f veth.a)
+                (f veth.b)
               ]
-            ) links;
+            ) veths;
+
+          # True if (ns, ifaceName) is an endpoint of any veth.
+          isVethEndpoint =
+            ns: ifaceName:
+            builtins.any (
+              veth:
+              (veth.a.ns == ns && veth.a.iface == ifaceName) || (veth.b.ns == ns && veth.b.iface == ifaceName)
+            ) veths;
 
           # Compute the PATH for a script: user packages only (runtime deps are for the outer script).
           mkScriptPkgs = nsCfg: scriptCfg: tb.packages ++ nsCfg.packages ++ scriptCfg.packages;
+
+          # Build _PATH assignment lines for a script's package list (indented for use inside a subshell).
+          mkScriptPathLines =
+            pkgs:
+            [ (if tb.inheritPath then "  _PATH=\"$PATH\" # inherit PATH" else "  _PATH=\"\" # clear PATH") ]
+            ++ map (p: "  _PATH=\"${lib.getBin p}/bin:$_PATH\"") pkgs;
 
           # Build the indented, escaped bash -c argument for a script entry.
           mkScriptArg =
@@ -377,7 +482,7 @@
               "\${SUDO_UID:+setpriv --reuid=\"\$SUDO_UID\" --regid=\"\$SUDO_GID\" --clear-groups --} mkdir -p '${nsCfg.workDir}'\n  cd '${nsCfg.workDir}'";
 
           # Runtime dependencies of the generated testbed binary.
-          # Also included in every script's PATH via mkScriptArg.
+          # These are only for the outer script.
           runtimeDeps = [
             pkgs.bash
             pkgs.iproute2
@@ -393,9 +498,14 @@
           # while only the current working directory is writable.
           mkBwrapPrefix =
             nsCfg: scriptCfg:
-            lib.optionalString (resolve3 "sandbox" scriptCfg nsCfg
-              tb
-            ) ''"''${_BWRAP[@]}" --bind "$PWD" "$PWD" --'';
+            let
+              sandboxed = resolveFirst "sandbox" [
+                scriptCfg
+                nsCfg
+                tb
+              ];
+            in
+            lib.optionalString sandboxed ''"''${_BWRAP[@]}" --bind "$PWD" "$PWD" --'';
 
           # {} in workDir enables repeated-run mode: the script accepts N as $1
           # and loops N times, substituting {} with a zero-padded index each run.
@@ -411,19 +521,19 @@
           ) (lib.attrNames namespaces ++ tb.bridges);
 
           # Bring loopback interfaces up
-          nsLoUpCommands = lib.mapAttrsToList (name: _: "ip netns exec ${name} ip link set lo up") namespaces;
+          nsLoUpCommands = lib.mapAttrsToList (name: _: "${execNs name}ip link set lo up") namespaces;
 
           nsPreSetupCommands = lib.mapAttrsToList (
             name: nsCfg:
             lib.optionalString (nsCfg.preSetup != "") ''
-              ip netns exec ${name} bash -c ${lib.escapeShellArg nsCfg.preSetup}
+              ${execNs name}bash -c ${lib.escapeShellArg nsCfg.preSetup}
             ''
           ) namespaces;
 
           nsPostSetupCommands = lib.mapAttrsToList (
             name: nsCfg:
             lib.optionalString (nsCfg.postSetup != "") ''
-              ip netns exec ${name} bash -c ${lib.escapeShellArg nsCfg.postSetup}
+              ${execNs name}bash -c ${lib.escapeShellArg nsCfg.postSetup}
             ''
           ) namespaces;
 
@@ -452,7 +562,7 @@
                       else
                         toString value;
                   in
-                  "ip netns exec ${name} sysctl -w ${key}=${rendered} > /dev/null"
+                  "${execNs name}sysctl -w ${key}=${rendered} > /dev/null"
                 )
               ) merged
             ) namespaces
@@ -467,15 +577,18 @@
                 # BDP in bytes: rateMbit * 1_000_000 / 8 * delayMs / 1000
                 # BDP in packets: BDP_bytes / mtu
                 bdpPackets =
-                  if n.delayMs != null && n.rateMbit != null then
+                  if n.delayMs != null && n.rateMbit != null && mtu != null then
                     n.rateMbit * 1000000 / 8 * n.delayMs / 1000 / mtu
                   else
                     null;
                 effectiveLimit =
                   if n.limit != null then
                     n.limit
-                  else if n.autoLimit == true && bdpPackets != null then
-                    bdpPackets
+                  else if n.autoLimit == true then
+                    if bdpPackets != null then
+                      bdpPackets
+                    else
+                      throw "netem autoLimit requires delayMs, rateMbit, and mtu to all be set on interface '${dev}'"
                   else
                     null;
                 params = lib.concatStringsSep " " (
@@ -491,91 +604,237 @@
             );
 
           # Create veth pairs
-          linkCreateCommands = lib.mapAttrsToList (
-            linkName: linkCfg:
-            "ip netns exec ${linkCfg.a.ns} ip link add ${linkName} type veth peer name ${linkName} netns ${linkCfg.b.ns}"
-          ) links;
+          vethCreateCommands = map (
+            veth:
+            "${execNs veth.a.ns}ip link add ${veth.a.iface} type veth peer name ${veth.b.iface} netns ${veth.b.ns}"
+          ) veths;
 
-          # Assign IP addresses
-          linkAddrCommands = mkLinkPairCmds (
-            linkName: iface:
-            lib.optionalString (
-              iface.ipv4 != null
-            ) "${execNs iface.ns}ip addr add ${iface.ipv4} dev ${linkName}"
+          # All {nsName, ifaceName} pairs from networking.interfaces that are not a veth endpoint.
+          dummyIfaces = lib.concatLists (
+            lib.mapAttrsToList (
+              nsName: nsCfg:
+              lib.concatMap (
+                ifaceName: lib.optional (!isVethEndpoint nsName ifaceName) { inherit nsName ifaceName; }
+              ) (lib.attrNames nsCfg.networking.interfaces)
+            ) namespaces
           );
 
-          # Bring link interfaces up
-          linkIfUpCommands = mkLinkPairCmds (linkName: iface: "${execNs iface.ns}ip link set ${linkName} up");
+          # Create dummy interfaces for networking.interfaces entries that have no veth endpoint
+          dummyCreateCommands = map (
+            { nsName, ifaceName }: "${execNs nsName}ip link add ${ifaceName} type dummy"
+          ) dummyIfaces;
 
-          # Attach interfaces to bridge
-          linkBridgeCommands = mkLinkPairCmds (
-            linkName: iface:
-            lib.optionalString (builtins.elem iface.ns tb.bridges) "${execNs iface.ns}ip link set ${linkName} master ${iface.ns}"
+          # Collect {ns, iface, addr} for all addresses of a given IP version.
+          collectAddrs =
+            getAddrs:
+            lib.concatLists (
+              lib.mapAttrsToList (
+                name: nsCfg:
+                lib.concatLists (
+                  lib.mapAttrsToList (
+                    ifaceName: ifaceCfg:
+                    map (a: {
+                      ns = name;
+                      iface = ifaceName;
+                      addr = "${a.address}/${toString a.prefixLength}";
+                    }) (getAddrs ifaceCfg)
+                  ) nsCfg.networking.interfaces
+                )
+              ) namespaces
+            );
+
+          ipv4Addrs = collectAddrs (ifaceCfg: ifaceCfg.ipv4.addresses);
+          ipv6Addrs = collectAddrs (ifaceCfg: ifaceCfg.ipv6.addresses);
+
+          mkAddrCommands =
+            ipCmd: addrs:
+            map (
+              {
+                ns,
+                iface,
+                addr,
+              }:
+              "${execNs ns}${ipCmd} addr add ${addr} dev ${iface}"
+            ) addrs;
+
+          # Assign IPv4/IPv6 addresses
+          ipv4AddrCommands = mkAddrCommands "ip" ipv4Addrs;
+          ipv6AddrCommands = mkAddrCommands "ip -6" ipv6Addrs;
+
+          # Bring veth interfaces up
+          linkIfUpCommands = mkVethPairCmds (node: "${execNs node.ns}ip link set ${node.iface} up");
+
+          # Bring dummy interfaces up
+          dummyIfUpCommands = map (
+            { nsName, ifaceName }: "${execNs nsName}ip link set ${ifaceName} up"
+          ) dummyIfaces;
+
+          # Attach veth interfaces to bridge
+          linkBridgeCommands = mkVethPairCmds (
+            node:
+            lib.optionalString (builtins.elem node.ns tb.bridges) "${execNs node.ns}ip link set ${node.iface} master ${node.ns}"
           );
 
-          # Configure MTU
-          linkMtuCommands = mkLinkPairCmds (
-            linkName: iface: "${execNs iface.ns}ip link set ${linkName} mtu ${toString iface.mtu}"
+          # Configure MTU for all interfaces from networking.interfaces
+          linkMtuCommands = lib.concatLists (
+            lib.mapAttrsToList (
+              nsName: nsCfg:
+              lib.mapAttrsToList (
+                ifaceName: ifaceCfg:
+                let
+                  mtu = resolveFirst "mtu" [
+                    ifaceCfg
+                    tb
+                  ];
+                in
+                lib.optionalString (mtu != null) "${execNs nsName}ip link set ${ifaceName} mtu ${toString mtu}"
+              ) nsCfg.networking.interfaces
+            ) namespaces
           );
 
-          # Configure ARP
-          linkArpCommands = lib.mapAttrsToList (
-            linkName: linkCfg:
+          # Configure ARP for veth endpoints
+          linkArpCommands = map (
+            veth:
             let
-              arpA = resolveArp linkCfg linkCfg.a;
-              arpB = resolveArp linkCfg linkCfg.b;
+              arpA = resolveFirst "arp" [
+                (getNsIface veth.a)
+                veth
+                tb
+              ];
+              arpB = resolveFirst "arp" [
+                (getNsIface veth.b)
+                veth
+                tb
+              ];
             in
             concatNonEmpty [
-              (lib.optionalString (!arpA) "${execNs linkCfg.a.ns}ip link set ${linkName} arp off")
-              (lib.optionalString (!arpB) "${execNs linkCfg.b.ns}ip link set ${linkName} arp off")
+              (lib.optionalString (!arpA) "${execNs veth.a.ns}ip link set ${veth.a.iface} arp off")
+              (lib.optionalString (!arpB) "${execNs veth.b.ns}ip link set ${veth.b.iface} arp off")
             ]
-          ) links;
+          ) veths;
 
-          # Configure netem
-          linkNetemCommands = lib.mapAttrsToList (
-            linkName: linkCfg:
-            concatNonEmpty [
-              (mkNetemCmd linkCfg.a.ns (resolveNetem linkCfg linkCfg.a) linkCfg.a.mtu "${linkName}")
-              (mkNetemCmd linkCfg.b.ns (resolveNetem linkCfg linkCfg.b) linkCfg.b.mtu "${linkName}")
-            ]
-          ) links;
-
-          # Prefill ARP tables
-          linkArpPrefillCommands = lib.mapAttrsToList (
-            linkName: linkCfg:
+          # Configure netem for veth pairs
+          linkNetemCommands = map (
+            veth:
             let
-              arpPrefillA = resolveArpPrefill linkCfg linkCfg.a;
-              arpPrefillB = resolveArpPrefill linkCfg linkCfg.b;
-              nsA = execNs linkCfg.a.ns;
-              nsB = execNs linkCfg.b.ns;
+              ifaceA = getNsIface veth.a;
+              ifaceB = getNsIface veth.b;
+            in
+            concatNonEmpty [
+              (mkNetemCmd veth.a.ns (resolveNetem veth.netem (ifaceA.netem or null)) (resolveFirst "mtu" [
+                ifaceA
+                tb
+              ]) veth.a.iface)
+              (mkNetemCmd veth.b.ns (resolveNetem veth.netem (ifaceB.netem or null)) (resolveFirst "mtu" [
+                ifaceB
+                tb
+              ]) veth.b.iface)
+            ]
+          ) veths;
+
+          # Prefill ARP tables for veth pairs
+          linkArpPrefillCommands = map (
+            veth:
+            let
+              arpPrefillA = resolveFirst "arpPrefill" [
+                (getNsIface veth.a)
+                veth
+                tb
+              ];
+              arpPrefillB = resolveFirst "arpPrefill" [
+                (getNsIface veth.b)
+                veth
+                tb
+              ];
+              nsA = execNs veth.a.ns;
+              nsB = execNs veth.b.ns;
+              getIpv4s = node: (getNsIface node).ipv4.addresses or [ ];
+              # Get MAC from peer once, then add a neigh entry for each of its IPv4 addresses.
               mkPrefill =
-                nsLocal: nsPeer: peerIpv4:
-                "_MAC=$(${nsPeer}cat /sys/class/net/${linkName}/address)\n${nsLocal}ip neigh add ${ipv4RemovePrefix peerIpv4} lladdr \"$_MAC\" dev ${linkName}";
+                nsLocal: localIface: nsPeer: peerIface: peerAddrs:
+                lib.optionalString (peerAddrs != [ ]) (
+                  "_MAC=$(${nsPeer}cat /sys/class/net/${peerIface}/address)\n"
+                  + lib.concatStringsSep "\n" (
+                    map (a: "${nsLocal}ip neigh add ${a.address} lladdr \"$_MAC\" dev ${localIface}") peerAddrs
+                  )
+                );
             in
             concatNonEmpty [
-              (lib.optionalString (arpPrefillA && linkCfg.b.ipv4 != null) (mkPrefill nsA nsB linkCfg.b.ipv4))
-              (lib.optionalString (arpPrefillB && linkCfg.a.ipv4 != null) (mkPrefill nsB nsA linkCfg.a.ipv4))
+              (lib.optionalString arpPrefillA (mkPrefill nsA veth.a.iface nsB veth.b.iface (getIpv4s veth.b)))
+              (lib.optionalString arpPrefillB (mkPrefill nsB veth.b.iface nsA veth.a.iface (getIpv4s veth.a)))
             ]
-          ) links;
+          ) veths;
 
-          # Declarative Routing
-          routeCommands = lib.mapAttrsToList (
-            name: nsCfg:
-            concatNonEmpty (
-              lib.optional (
-                nsCfg.defaultRoute != null
-              ) "ip netns exec ${name} ip route add default via ${nsCfg.defaultRoute}"
-              ++ map (route: "ip netns exec ${name} ip route add ${route.subnet} via ${route.via}") nsCfg.routes
-            )
-          ) namespaces;
+          # Build per-namespace route commands for one IP version.
+          # ipCmd: "ip" or "ip -6"; getGw: nsCfg -> gw|null; getRoutes: ifaceCfg -> list
+          mkRouteCommands =
+            ipCmd: getGw: getRoutes:
+            lib.mapAttrsToList (
+              name: nsCfg:
+              let
+                gw = getGw nsCfg;
+              in
+              concatNonEmpty (
+                lib.optional (gw != null) (
+                  "${execNs name}${ipCmd} route add default via ${gw.address}"
+                  + lib.optionalString (gw.interface != null) " dev ${gw.interface}"
+                  + lib.optionalString (gw.source != null) " src ${gw.source}"
+                  + lib.optionalString (gw.metric != null) " metric ${toString gw.metric}"
+                )
+                ++ lib.concatLists (
+                  lib.mapAttrsToList (
+                    ifaceName: ifaceCfg:
+                    map (
+                      route:
+                      "${execNs name}${ipCmd} route add ${route.address}/${toString route.prefixLength}"
+                      + lib.optionalString (route.via or null != null) " via ${route.via}"
+                      + " dev ${ifaceName}"
+                    ) (getRoutes ifaceCfg)
+                  ) nsCfg.networking.interfaces
+                )
+              )
+            ) namespaces;
+
+          # Declarative IPv4/IPv6 Routing
+          ipv4RouteCommands = mkRouteCommands "ip" (nsCfg: nsCfg.networking.defaultGateway) (
+            ifaceCfg: ifaceCfg.ipv4.routes
+          );
+          ipv6RouteCommands = mkRouteCommands "ip -6" (nsCfg: nsCfg.networking.defaultGateway6) (
+            ifaceCfg: ifaceCfg.ipv6.routes
+          );
 
           # Create bridge devices inside their namespaces.
           bridgeAddCommands = map (
-            brName: "ip netns exec ${brName} ip link add ${brName} type bridge stp_state 0"
+            brName: "${execNs brName}ip link add ${brName} type bridge stp_state 0"
           ) tb.bridges;
 
           # Set bridges to up
-          bridgeUpCommands = map (brName: "ip netns exec ${brName} ip link set ${brName} up") tb.bridges;
+          bridgeUpCommands = map (brName: "${execNs brName}ip link set ${brName} up") tb.bridges;
+
+          setupPhaseSections = lib.concatStringsSep "\n\n" (
+            lib.filter (s: s != "") [
+              (mkBashSection "pre-setup hook" [ tb.preSetup ])
+              (mkBashSection "create namespaces" nsCreateCommands)
+              (mkBashSection "namespace pre-setup hooks" nsPreSetupCommands)
+              (mkBashSection "sysctl settings" nsSysctlCommands)
+              (mkBashSection "create bridges" bridgeAddCommands)
+              (mkBashSection "create veth pairs" vethCreateCommands)
+              (mkBashSection "create dummy interfaces" dummyCreateCommands)
+              (mkBashSection "assign ipv4 addresses" ipv4AddrCommands)
+              (mkBashSection "assign ipv6 addresses" ipv6AddrCommands)
+              (mkBashSection "attach interfaces to bridges" linkBridgeCommands)
+              (mkBashSection "set bridges up" bridgeUpCommands)
+              (mkBashSection "set interfaces up" (nsLoUpCommands ++ linkIfUpCommands ++ dummyIfUpCommands))
+              (mkBashSection "configure mtu" linkMtuCommands)
+              (mkBashSection "configure arp" linkArpCommands)
+              (mkBashSection "configure netem" linkNetemCommands)
+              (mkBashSection "prefill arp" linkArpPrefillCommands)
+              (mkBashSection "configure ipv4 routing" ipv4RouteCommands)
+              (mkBashSection "configure ipv6 routing" ipv6RouteCommands)
+              (mkBashSection "namespace post-setup hooks" nsPostSetupCommands)
+              (mkBashSection "post-setup hook" [ tb.postSetup ])
+            ]
+          );
 
           # Launch scripts in parallel; mark awaited ones; skip foreground scripts
           launchScripts = lib.concatLists (
@@ -586,22 +845,34 @@
                   scriptCfg:
                   lib.optional (!scriptCfg.foreground) (
                     let
-                      scriptPath = lib.makeBinPath (mkScriptPkgs nsCfg scriptCfg);
                       script = mkScriptArg nsCfg scriptCfg;
-                      toOutput = if resolve2 "stdout" nsCfg tb then "2>&1 | sed 's/^/${name}| /'" else "> /dev/null 2>&1";
+                      toOutput =
+                        if
+                          resolveFirst "stdout" [
+                            nsCfg
+                            tb
+                          ]
+                        then
+                          "2>&1 | sed 's/^/${name}| /'"
+                        else
+                          "> /dev/null 2>&1";
                       cdNs = mkCdNs nsCfg;
                     in
-                    concatNonEmpty [
-                      "("
-                      "  set +m"
-                      (lib.optionalString (cdNs != "") "  ${cdNs}")
-                      "  _PATH=\"${scriptPath}${lib.optionalString tb.inheritPath ":$PATH"}\""
-                      "  stdbuf -oL ip netns exec ${name} \${SUDO_UID:+setpriv --reuid=\"\$SUDO_UID\" --regid=\"\$SUDO_GID\" --clear-groups --} ${mkBwrapPrefix nsCfg scriptCfg} \"$_ENV\" PATH=\"$_PATH\" \"$_BASH\" -c ${script} ${toOutput}"
-                      ") &"
-                      "echo \"${name}| PID $! started\""
-                      "PIDS+=($!)"
-                      (lib.optionalString scriptCfg.await "WAIT_PIDS+=($!)")
-                    ]
+                    concatNonEmpty (
+                      [
+                        "("
+                        "  set +m"
+                      ]
+                      ++ lib.optional (cdNs != "") "  ${cdNs}"
+                      ++ mkScriptPathLines (mkScriptPkgs nsCfg scriptCfg)
+                      ++ [
+                        "  stdbuf -oL ${execNs name}\${SUDO_UID:+setpriv --reuid=\"\$SUDO_UID\" --regid=\"\$SUDO_GID\" --clear-groups --} ${mkBwrapPrefix nsCfg scriptCfg} \"$_ENV\" PATH=\"$_PATH\" \"$_BASH\" -c ${script} ${toOutput}"
+                        ") &"
+                        "echo \"${name}| PID $! started\""
+                        "PIDS+=($!)"
+                      ]
+                      ++ lib.optional scriptCfg.await "WAIT_PIDS+=($!)"
+                    )
                   )
                 ) nsCfg.scripts
               )
@@ -617,30 +888,53 @@
                   scriptCfg:
                   lib.optional scriptCfg.foreground (
                     let
-                      scriptPath = lib.makeBinPath (mkScriptPkgs nsCfg scriptCfg);
                       script = mkScriptArg nsCfg scriptCfg;
                       cdNs = mkCdNs nsCfg;
                     in
-                    concatNonEmpty [
-                      "echo \"${name}| start foreground script\""
-                      "("
-                      (lib.optionalString (cdNs != "") "  ${cdNs}")
-                      "  _PATH=\"${scriptPath}${lib.optionalString tb.inheritPath ":$PATH"}\""
-                      "  ip netns exec ${name} \${SUDO_UID:+setpriv --reuid=\"\$SUDO_UID\" --regid=\"\$SUDO_GID\" --clear-groups --} ${mkBwrapPrefix nsCfg scriptCfg} \"$_ENV\" PATH=\"$_PATH\" \"$_BASH\" -c ${script}"
-                      ")"
-                      "echo \"${name}| end foreground script\""
-                    ]
+                    concatNonEmpty (
+                      [
+                        "echo \"${name}| start foreground script\""
+                        "("
+                      ]
+                      ++ lib.optional (cdNs != "") "  ${cdNs}"
+                      ++ mkScriptPathLines (mkScriptPkgs nsCfg scriptCfg)
+                      ++ [
+                        "  ${execNs name}\${SUDO_UID:+setpriv --reuid=\"\$SUDO_UID\" --regid=\"\$SUDO_GID\" --clear-groups --} ${mkBwrapPrefix nsCfg scriptCfg} \"$_ENV\" PATH=\"$_PATH\" \"$_BASH\" -c ${script}"
+                        ")"
+                        "echo \"${name}| end foreground script\""
+                      ]
+                    )
                   )
                 ) nsCfg.scripts
               )
             ) namespaces
+          );
+
+          runPhaseSections = lib.concatStringsSep "\n\n" (
+            lib.filter (s: s != "") [
+              (mkBashSection "pre-run hook" [ tb.preRun ])
+              (mkBashSection "launch background scripts" launchScripts)
+              (mkBashSection "launch foreground scripts" fgScripts)
+              (lib.strings.trim ''
+                # wait for background processes marked as await
+                for PID in "''${WAIT_PIDS[@]}"; do
+                  wait "$PID" 2>/dev/null || true
+                  echo "testbed| PID $PID ended"
+                done
+              '')
+              (mkBashSection "post-run hook" [ tb.postRun ])
+            ]
           );
         in
         pkgs.writeShellApplication {
           inherit name;
           excludeShellChecks = [ "SC2016" ]; # $PATH in bash -c single-quoted arg is intentional
           text = ''
-            export PATH="${lib.makeBinPath runtimeDeps}${lib.optionalString tb.inheritPath ":$PATH"}"
+            ${mkBashSection "setup PATH" (
+              [ (if tb.inheritPath then "_PATH=\"$PATH\" # inherit PATH" else "_PATH=\"\" # clear PATH") ]
+              ++ map (p: "_PATH=\"${lib.getBin p}/bin:$_PATH\"") runtimeDeps
+              ++ [ "export PATH=\"$_PATH\"" ]
+            )}
 
             if [ -z "''${_TESTBED_CLEAN_ENV+x}" ]; then
               exec env -i \
@@ -713,128 +1007,66 @@
               cd "$_WORK_DIR"
             ''}
 
-            # pre-setup hook
-            ${tb.preSetup}
-
-            # create namespaces
-            ${lib.concatStringsSep "\n" nsCreateCommands}
-
-            # namespace pre-setup hooks
-            ${concatNonEmpty nsPreSetupCommands}
-
-            # sysctl settings
-            ${concatNonEmpty nsSysctlCommands}
-
-            # create bridges
-            ${lib.concatStringsSep "\n" bridgeAddCommands}
-
-            # create links
-            ${lib.concatStringsSep "\n" linkCreateCommands}
-
-            # assign addresses
-            ${lib.concatStringsSep "\n" linkAddrCommands}
-
-            # attach interfaces to bridges
-            ${concatNonEmpty linkBridgeCommands}
-
-            # set bridges up
-            ${lib.concatStringsSep "\n" bridgeUpCommands}
-
-            # set interfaces up
-            ${lib.concatStringsSep "\n" (nsLoUpCommands ++ linkIfUpCommands)}
-
-            # configure mtu
-            ${lib.concatStringsSep "\n" linkMtuCommands}
-
-            # configure arp
-            ${concatNonEmpty linkArpCommands}
-
-            # configure netem
-            ${concatNonEmpty linkNetemCommands}
-
-            # prefill arp
-            ${concatNonEmpty linkArpPrefillCommands}
-
-            # configure routing
-            ${concatNonEmpty routeCommands}
-
-            # namespace post-setup hooks
-            ${concatNonEmpty nsPostSetupCommands}
-
-            # post-setup hook
-            ${tb.postSetup}
+            ${setupPhaseSections}
 
             echo "testbed| network topology set up"
 
-            # pre-run hook
-            ${tb.preRun}
-
-            # launch background scripts
-            ${lib.concatStringsSep "\n\n" launchScripts}
-
-            # launch foreground scripts
-            ${lib.concatStringsSep "\n\n" fgScripts}
-
-            # wait for background processes marked as await
-            for PID in "''${WAIT_PIDS[@]}"; do
-              wait "$PID" 2>/dev/null || true
-              echo "testbed| PID $PID ended"
-            done
-
-            # post-run hook
-            ${tb.postRun}'';
+            ${runPhaseSections}'';
         };
       buildMermaid =
-        lib: tb:
+        pkgs: tb:
         let
+          lib = pkgs.lib;
           # Sanitize names for use as Mermaid node IDs (hyphens not allowed)
           nodeId = name: lib.replaceStrings [ "-" " " "." ] [ "_" "_" "_" ] name;
 
           mkIfaceLabel =
-            linkName: linkCfg: node:
+            veth: node:
             let
-              netemCfg = resolveNetem linkCfg node;
+              nsIface =
+                if tb.namespaces ? ${node.ns} && tb.namespaces.${node.ns}.networking.interfaces ? ${node.iface} then
+                  tb.namespaces.${node.ns}.networking.interfaces.${node.iface}
+                else
+                  null;
+              ipv4s = map (a: "${a.address}/${toString a.prefixLength}") (nsIface.ipv4.addresses or [ ]);
+              netemCfg = resolveNetem veth.netem (nsIface.netem or null);
             in
             lib.concatStringsSep " " (
               lib.filter (s: s != "") (
-                [
-                  linkName
-                  (lib.optionalString (node.ipv4 != null) node.ipv4)
+                [ node.iface ]
+                ++ ipv4s
+                ++ lib.optionals (netemCfg != null) [
+                  (lib.optionalString (netemCfg.delayMs != null) "${toString netemCfg.delayMs}ms")
+                  (lib.optionalString (netemCfg.lossPercent != null) "${builtins.toJSON netemCfg.lossPercent}%loss")
+                  (lib.optionalString (netemCfg.rateMbit != null) "${toString netemCfg.rateMbit}Mbit/s")
                 ]
-                ++ lib.optionals (netemCfg != null) (
-                  lib.filter (s: s != "") [
-                    (lib.optionalString (netemCfg.delayMs != null) "${toString netemCfg.delayMs}ms")
-                    (lib.optionalString (netemCfg.lossPercent != null) "${builtins.toJSON netemCfg.lossPercent}%loss")
-                    (lib.optionalString (netemCfg.rateMbit != null) "${toString netemCfg.rateMbit}Mbit/s")
-                  ]
-                )
               )
             );
 
           nsDecls = lib.mapAttrsToList (name: _: "    ${nodeId name}[${name}]") tb.namespaces;
 
           ifaceDecls = lib.concatLists (
-            lib.mapAttrsToList (
-              linkName: linkCfg:
+            map (
+              veth:
               let
-                idA = "${nodeId linkName}_${nodeId linkCfg.a.ns}";
-                idB = "${nodeId linkName}_${nodeId linkCfg.b.ns}";
+                idA = "${nodeId veth.a.iface}_${nodeId veth.a.ns}";
+                idB = "${nodeId veth.b.iface}_${nodeId veth.b.ns}";
               in
               [
-                "    ${idA}@{ shape: text, label: \"${mkIfaceLabel linkName linkCfg linkCfg.a}\" }"
-                "    ${idB}@{ shape: text, label: \"${mkIfaceLabel linkName linkCfg linkCfg.b}\" }"
+                "    ${idA}@{ shape: text, label: \"${mkIfaceLabel veth veth.a}\" }"
+                "    ${idB}@{ shape: text, label: \"${mkIfaceLabel veth veth.b}\" }"
               ]
-            ) tb.links
+            ) tb.veths
           );
 
-          edgeDecls = lib.mapAttrsToList (
-            linkName: linkCfg:
+          edgeDecls = map (
+            veth:
             let
-              idA = "${nodeId linkName}_${nodeId linkCfg.a.ns}";
-              idB = "${nodeId linkName}_${nodeId linkCfg.b.ns}";
+              idA = "${nodeId veth.a.iface}_${nodeId veth.a.ns}";
+              idB = "${nodeId veth.b.iface}_${nodeId veth.b.ns}";
             in
-            "    ${nodeId linkCfg.a.ns} --- ${idA} --- ${idB} --- ${nodeId linkCfg.b.ns}"
-          ) tb.links;
+            "    ${nodeId veth.a.ns} --- ${idA} --- ${idB} --- ${nodeId veth.b.ns}"
+          ) tb.veths;
         in
         lib.concatStringsSep "\n" ([ "graph LR" ] ++ nsDecls ++ ifaceDecls ++ edgeDecls) + "\n";
 
@@ -848,45 +1080,25 @@
       perSystem =
         { pkgs, ... }:
         {
-          legacyPackages.mkTestbed =
-            networkConfig:
+          legacyPackages =
             let
               lib = pkgs.lib;
-              evaluated = lib.evalModules {
-                modules = [
-                  {
-                    options = mkTestbedOptions lib;
-                    config = networkConfig;
-                  }
-                ];
-              };
-            in
-            buildTestbed pkgs evaluated.config;
-
-          legacyPackages = {
-            options =
-              let
-                lib = pkgs.lib;
-              in
-              (lib.evalModules {
-                modules = [ { options = mkTestbedOptions lib; } ];
-              }).options;
-
-            mkMermaid =
-              networkConfig:
-              let
-                lib = pkgs.lib;
-                evaluated = lib.evalModules {
+              evalConfig =
+                networkConfig:
+                lib.evalModules {
                   modules = [
                     {
-                      options = mkTestbedOptions lib;
+                      options = mkTestbedOptions pkgs;
                       config = networkConfig;
                     }
                   ];
                 };
-              in
-              buildMermaid lib evaluated.config;
-          };
+            in
+            {
+              options = (lib.evalModules { modules = [ { options = mkTestbedOptions pkgs; } ]; }).options;
+              mkTestbed = networkConfig: buildTestbed pkgs (evalConfig networkConfig).config;
+              mkMermaid = networkConfig: buildMermaid pkgs (evalConfig networkConfig).config;
+            };
         };
     };
 }

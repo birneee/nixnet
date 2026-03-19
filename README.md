@@ -22,19 +22,20 @@ Add nixnet as a flake input and call `mkTestbed` from `legacyPackages`:
         packages.default = inputs'.nixnet.legacyPackages.mkTestbed {
           packages = with pkgs; [ coreutils iperf3 ];
           namespaces = {
-            client.scripts = [{
-              exec = "sleep 0.1; iperf3 -c 10.0.0.2";
-              await = true;
-            }];
-            server.scripts = [{
-              exec = "iperf3 -s";
-            }];
+            client = {
+              networking.interfaces.veth0.ipv4.addresses = [{ address = "10.0.0.1"; prefixLength = 24; }];
+              scripts = [{ exec = "sleep 0.1; iperf3 -c 10.0.0.2"; await = true; }];
+            };
+            server = {
+              networking.interfaces.veth0.ipv4.addresses = [{ address = "10.0.0.2"; prefixLength = 24; }];
+              scripts = [{ exec = "iperf3 -s"; }];
+            };
           };
-          links.veth0 = {
+          veths = [{
             netem.lossPercent = 1;
-            a = { ns = "client"; ipv4 = "10.0.0.1/24"; };
-            b = { ns = "server"; ipv4 = "10.0.0.2/24"; };
-          };
+            a = { ns = "client"; iface = "veth0"; };
+            b = { ns = "server"; iface = "veth0"; };
+          }];
         };
       };
     };
@@ -90,7 +91,7 @@ nixnet is designed for lightweight, reproducible experiments that run real appli
 | `name` | `str` | `"network-testbed"` | Name of the output binary. |
 | `namespaces` | `attrs` | `{}` | Network namespaces to create. |
 | `bridges` | `list` | `[]` | Linux bridges to create. Each bridge gets its own network namespace of the same name. |
-| `links` | `attrs` | `{}` | Veth link pairs connecting namespaces. |
+| `veths` | `list` | `[]` | Veth pairs connecting namespaces. |
 | `packages` | `list` | `[]` | Packages prepended to PATH for all scripts in all namespaces. |
 | `workDir` | `str \| null` | `null` | Working directory for the testbed. Created if absent. If the path contains `{}`, it is replaced at runtime with a two-digit zero-padded run index (default `00`), e.g. `"./out/{}"` with `sudo nix run . -- 5` uses `./out/05`. Pass a range to run multiple times: `sudo nix run . -- 1-5`. |
 | `workDirEnsureEmpty` | `bool` | `false` | Abort if `workDir` is non-empty, preventing results from being overwritten. |
@@ -109,8 +110,16 @@ nixnet is designed for lightweight, reproducible experiments that run real appli
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `defaultRoute` | `str \| null` | `null` | Default route gateway. |
-| `routes` | `list` | `[]` | Static routes: `[{ subnet = "..."; via = "..."; }]`. |
+| `networking.defaultGateway` | `str \| { address, interface?, source?, metric? } \| null` | `null` | Default IPv4 gateway. Compatible with NixOS `networking.defaultGateway`. |
+| `networking.defaultGateway6` | `str \| { address, interface?, source?, metric? } \| null` | `null` | Default IPv6 gateway. Compatible with NixOS `networking.defaultGateway6`. |
+| `networking.interfaces.<name>.ipv4.addresses` | `list` | `[]` | IPv4 addresses: `[{ address = "10.0.0.1"; prefixLength = 24; }]`. Compatible with NixOS. |
+| `networking.interfaces.<name>.ipv4.routes` | `list` | `[]` | IPv4 static routes: `[{ address = "10.0.1.0"; prefixLength = 24; via = "10.0.0.2"; }]`. Compatible with NixOS. |
+| `networking.interfaces.<name>.ipv6.addresses` | `list` | `[]` | IPv6 addresses. Compatible with NixOS. |
+| `networking.interfaces.<name>.ipv6.routes` | `list` | `[]` | IPv6 static routes. Compatible with NixOS. |
+| `networking.interfaces.<name>.mtu` | `int \| null` | `null` | MTU for this interface. Compatible with NixOS. |
+| `networking.interfaces.<name>.netem` | `attrs \| null` | `null` | Per-interface netem parameters. Overrides veth-level netem. |
+| `networking.interfaces.<name>.arp` | `bool \| null` | `null` | Enable ARP. Overrides veth-level and top-level `arp`. |
+| `networking.interfaces.<name>.arpPrefill` | `bool \| null` | `null` | Prefill ARP table with the peer's MAC address. Overrides veth-level and top-level `arpPrefill`. |
 | `packages` | `list` | `[]` | Packages prepended to PATH for all scripts in this namespace. |
 | `scripts` | `list` | `[]` | Scripts to run in this namespace. Background scripts are launched in parallel; foreground scripts run sequentially after all background scripts are started. |
 | `stdout` | `bool \| null` | `null` | Print script output to the console. Overrides top-level `stdout`. |
@@ -130,26 +139,22 @@ nixnet is designed for lightweight, reproducible experiments that run real appli
 | `packages` | `list` | `[]` | Packages prepended to PATH for this script only. |
 | `sandbox` | `bool \| null` | `null` | Sandbox this script with bubblewrap. Overrides namespace-level and top-level `sandbox`. |
 
-### Link options
+### Veth options
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `a` | `attrs` | — | First endpoint of the veth pair (see endpoint options below). |
-| `b` | `attrs` | — | Second endpoint of the veth pair (see endpoint options below). |
-| `netem` | `attrs \| null` | `null` | netem parameters applied to both endpoints. Individual fields can be overridden per endpoint. |
+| `a` | `attrs` | — | First endpoint (see endpoint options below). |
+| `b` | `attrs` | — | Second endpoint (see endpoint options below). |
+| `netem` | `attrs \| null` | `null` | netem parameters applied to both endpoints. Individual fields can be overridden per interface via `networking.interfaces`. |
 | `arp` | `bool \| null` | `null` | Enable ARP on both endpoints. Overrides top-level `arp`. |
 | `arpPrefill` | `bool \| null` | `null` | Prefill ARP tables for both endpoints. Overrides top-level `arpPrefill`. |
 
-### Link endpoint options
+### Veth endpoint options
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `ns` | `str` | — | Namespace or bridge to link. |
-| `ipv4` | `str` | — | IPv4 address with prefix length, e.g. `"10.0.0.1/24"`. |
-| `mtu` | `int` | `1500` | MTU for this interface. |
-| `netem` | `attrs \| null` | `null` | netem parameters. Individual fields override the link-level `netem`. |
-| `arp` | `bool \| null` | `null` | Enable ARP. Overrides link-level and top-level `arp`. |
-| `arpPrefill` | `bool \| null` | `null` | Prefill ARP table with the peer's MAC address. Overrides link-level and top-level `arpPrefill`. |
+| `ns` | `str` | — | Namespace or bridge name. |
+| `iface` | `str` | — | Interface name within the namespace. |
 
 ### netem options
 
@@ -200,7 +205,6 @@ watchexec -e nix -- 'nix eval --raw .#legacyPackages.x86_64-linux.mermaid | mmdc
 - random netns postfix to multiple experiments can run at the same time
 - easy nixnet cli tool
 - nixnet mermaid --watch
-- better IPv6 support
 
 ## LSP Configuration
 
