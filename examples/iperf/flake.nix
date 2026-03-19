@@ -6,7 +6,7 @@
   };
 
   outputs =
-    inputs@{ nixpkgs, flake-parts, ... }:
+    inputs@{ flake-parts, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [
         "x86_64-linux"
@@ -26,12 +26,21 @@
             ];
             namespaces = {
               ns-client = {
-                routes = [
-                  {
-                    subnet = "10.0.1.0/24";
-                    via = "10.0.0.2";
-                  }
-                ];
+                networking.interfaces.veth0.ipv4 = {
+                  addresses = [
+                    {
+                      address = "10.0.0.1";
+                      prefixLength = 24;
+                    }
+                  ];
+                  routes = [
+                    {
+                      address = "10.0.1.0";
+                      prefixLength = 24;
+                      via = "10.0.0.2";
+                    }
+                  ];
+                };
                 scripts = [
                   {
                     exec = ''
@@ -44,46 +53,67 @@
                 workDir = "./client";
               };
               ns-router = {
+                networking.interfaces = {
+                  veth0.ipv4.addresses = [
+                    {
+                      address = "10.0.0.2";
+                      prefixLength = 24;
+                    }
+                  ];
+                  veth1.ipv4.addresses = [
+                    {
+                      address = "10.0.1.1";
+                      prefixLength = 24;
+                    }
+                  ];
+                };
                 sysctl."net.ipv4.ip_forward" = true;
               };
               ns-server = {
-                routes = [
-                  {
-                    subnet = "10.0.0.0/24";
-                    via = "10.0.1.1";
-                  }
-                ];
+                networking.interfaces.veth0.ipv4 = {
+                  addresses = [
+                    {
+                      address = "10.0.1.2";
+                      prefixLength = 24;
+                    }
+                  ];
+                  routes = [
+                    {
+                      address = "10.0.0.0";
+                      prefixLength = 24;
+                      via = "10.0.1.1";
+                    }
+                  ];
+                };
                 scripts = [
                   { exec = "iperf3 -s > ./stdout 2>&1"; }
                 ];
                 workDir = "./server";
               };
             };
-            links = {
-              veth0 = {
-                netem = {
-                  delayMs = 50;
-                };
+            veths = [
+              {
+                netem.delayMs = 50;
                 a = {
                   ns = "ns-client";
-                  ipv4 = "10.0.0.1/24";
+                  iface = "veth0";
                 };
                 b = {
                   ns = "ns-router";
-                  ipv4 = "10.0.0.2/24";
+                  iface = "veth0";
                 };
-              };
-              veth1 = {
+              }
+              {
                 a = {
                   ns = "ns-router";
-                  ipv4 = "10.0.1.1/24";
+                  iface = "veth1";
                 };
                 b = {
                   ns = "ns-server";
-                  ipv4 = "10.0.1.2/24";
+                  iface = "veth0";
                 };
-              };
-            };
+              }
+            ];
           };
         in
         {
