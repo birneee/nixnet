@@ -97,8 +97,9 @@ nixnet is designed for lightweight, reproducible experiments that run real appli
 | `workDirEnsureEmpty` | `bool` | `false` | Abort if `workDir` is non-empty, preventing results from being overwritten. |
 | `stdout` | `bool` | `true` | Print script output to the console, prefixed with the namespace name. Can be overridden per namespace. |
 | `sysctl` | `attrs` | `{}` | Sysctl settings applied in all namespaces. Same type as NixOS `boot.kernel.sysctl`. Can be overridden per namespace. |
-| `arp` | `bool` | `true` | Enable ARP on all interfaces. Can be overridden per link or per endpoint. |
-| `arpPrefill` | `bool` | `false` | Prefill ARP tables with peer MAC addresses at startup. Can be overridden per link or per endpoint. |
+| `mtu` | `int \| null` | `null` | Default MTU for all interfaces. Can be overridden per interface via `networking.interfaces`. |
+| `arp` | `bool` | `true` | Enable ARP on all interfaces. Can be overridden per veth or per interface. |
+| `arpPrefill` | `bool` | `false` | Prefill ARP tables with peer MAC addresses at startup. Can be overridden per veth or per interface. |
 | `sandbox` | `bool` | `true` | Sandbox all scripts with bubblewrap: read-only filesystem access, write access limited to the script's working directory, isolated PID/UTS/IPC namespaces, cleared environment. Can be overridden per namespace or per script. |
 | `inheritPath` | `bool` | `false` | Append the system PATH. Useful for accessing host tools not managed by Nix. |
 | `preSetup` | `str` | `""` | Shell code to run before the setup phase (before namespaces and links are created). Runs as root. |
@@ -158,7 +159,7 @@ nixnet is designed for lightweight, reproducible experiments that run real appli
 
 ### netem options
 
-netem can be set at the link level or per endpoint. Endpoint fields override link-level fields.
+netem can be set at the veth level or per interface via `networking.interfaces.<name>.netem`. Interface fields override veth-level fields.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
