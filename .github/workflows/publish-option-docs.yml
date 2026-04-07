@@ -22,23 +22,24 @@ jobs:
       - name: Build option docs
         run: nix build .#nixnet-option-docs
 
-      - name: Convert to HTML
-        run: |
-          nix shell nixpkgs#pandoc --command \
-            pandoc result \
-              --from gfm \
-              --to html5 \
-              --standalone \
-              --metadata title="NixNet Options" \
-              --output nixnet-options-docs.html
-
       - name: Publish to latest release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp result nixnet-options-docs.md
           gh release delete latest --yes --cleanup-tag 2>/dev/null || true
-          gh release create latest nixnet-options-docs.md nixnet-options-docs.html \
+          gh release create latest nixnet-options-docs.md \
             --title "Latest" \
             --notes "Auto-updated option docs." \
             --prerelease
+
+      - name: Push to wiki
+        run: |
+          git clone https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.wiki.git wiki
+          cp nixnet-options-docs.md wiki/nixnet-options-docs-latest.md
+          cd wiki
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add nixnet-options-docs-latest.md
+          git diff --cached --quiet || git commit -m "Update option docs"
+          git push
