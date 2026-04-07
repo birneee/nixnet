@@ -11,15 +11,15 @@
       pkgs = nixpkgs.legacyPackages.${system};
       nixnet = inputs.nixnet.legacyPackages.${system};
       starlink = inputs.starlink.packages.${system}.default;
+      packages = with pkgs; [
+        iperf3
+      ];
     in
     {
       packages.${system}.default = nixnet.mkTestbed {
-        packages = with pkgs; [
-          coreutils
-          iperf3
-        ];
         namespaces = {
           client = {
+            inherit packages;
             networking.interfaces.veth0.ipv4.addresses = [
               {
                 address = "10.0.0.1";
@@ -35,6 +35,7 @@
             ];
           };
           server = {
+            inherit packages;
             networking.interfaces.veth0.ipv4.addresses = [
               {
                 address = "10.0.0.2";
