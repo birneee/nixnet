@@ -16,14 +16,16 @@ jobs:
           - ubuntu-latest
           - ubuntu-24.04-arm
         example:
-          - name: ping
-          - name: iperf
-          - name: tcpdump
           - name: ebpf
             sudo: true
+          - name: iperf
+          - name: nc
+          - name: ping
           - name: quiche_perf
           - name: route_metric
+          - name: tcpdump
           #- name: chromium # requires display
+          #- name: tmux # requires interactive terminal
     steps:
       - uses: actions/checkout@v6
       - uses: DeterminateSystems/nix-installer-action@v22
