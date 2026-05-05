@@ -339,6 +339,19 @@
         let
           lib = pkgs.lib;
           wrap = import ./wrap.nix pkgs;
+          writeRunJson =
+            (pkgs.writeShellApplication {
+              name = "write_run_json";
+              runtimeInputs = with pkgs; [
+                coreutils
+                gnugrep
+                gawk
+                findutils
+                inetutils
+              ];
+              text = builtins.readFile ./write_run_json.sh;
+            }).outPath
+            + "/bin/write_run_json";
           namespaces = tb.namespaces;
           veths = tb.veths;
           workDir = tb.workDir;
@@ -920,6 +933,8 @@
               mkdir -p "$_WORK_DIR"
               cd "$_WORK_DIR"
               echo "testbed| pwd: $(pwd)"
+              _STORE_PATH="$(dirname "$(dirname "$0")")"
+              ${writeRunJson} "$_STORE_PATH"
             ''}
 
             ${setupPhaseSections}

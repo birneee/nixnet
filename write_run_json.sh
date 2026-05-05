@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+store_path="$1"
+timestamp="$(date -Iseconds)"
+
+cpu_model="$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs || echo unknown)"
+cpu_cores="$(nproc)"
+cpu_governor="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unknown)"
+cpu_freq_khz="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null || echo 0)"
+turbo_disabled="$(cat /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null || echo unknown)"
+
+mem_total_kb="$(grep MemTotal /proc/meminfo | awk '{print $2}')"
+mem_total_mb="$(( mem_total_kb / 1024 ))"
+thp="$(cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null | grep -oP '\[\K[^\]]+' || echo unknown)"
+
+load="$(cut -d' ' -f1-3 /proc/loadavg)"
+
+kernel="$(uname -r)"
+kernel_full="$(uname -srvm)"
+arch="$(uname -m)"
+hostname="$(hostname)"
+
+# Dump all scalar /proc/sys/net values, skipping per-interface conf/ and neigh/ subtrees.
+# Tries to parse value as JSON number/array, falls back to quoted string.
+sysctl_json() {
+  local first=1
+  while IFS= read -r -d '' f; do
+    local key val json_val
+    key="${f#/proc/sys/}"
+    key="${key//\//.}"
+    val="$(cat "$f" 2>/dev/null)" || continue
+    # Try integer
+    if [[ "$val" =~ ^-?[0-9]+$ ]]; then
+      json_val="$val"
+    # Try whitespace-separated integers (triple like tcp_rmem)
+    elif [[ "$val" =~ ^-?[0-9]+([[:space:]]+-?[0-9]+)+$ ]]; then
+      json_val="[$(echo "$val" | xargs | tr ' ' ',')]"
+    else
+      # Escape backslashes and double quotes, strip newlines
+      val="${val//\\/\\\\}"
+      val="${val//\"/\\\"}"
+      val="${val//$'\n'/ }"
+      json_val="\"$val\""
+    fi
+    [ "$first" -eq 1 ] && first=0 || printf ','
+    printf '\n      "%s": %s' "$key" "$json_val"
+  done < <(find /proc/sys/net \
+    -not \( -path '*/conf/*' -prune \) \
+    -not \( -path '*/neigh/*' -prune \) \
+    -not \( -path '*/nf_log/*' -prune \) \
+    -type f -print0 | sort -z)
+}
+
+cat > run.json <<EOF
+{
+  "experiment": "${store_path}",
+  "timestamp": "${timestamp}",
+  "host": {
+    "hostname": "${hostname}",
+    "kernel": "${kernel}",
+    "kernel_full": "${kernel_full}",
+    "arch": "${arch}",
+    "load_avg": "${load}",
+    "cpu": {
+      "model": "${cpu_model}",
+      "cores": ${cpu_cores},
+      "governor": "${cpu_governor}",
+      "freq_khz": ${cpu_freq_khz},
+      "turbo_disabled": "${turbo_disabled}"
+    },
+    "mem": {
+      "total_mb": ${mem_total_mb},
+      "transparent_hugepages": "${thp}"
+    },
+    "sysctl": {$(sysctl_json)
+    }
+  }
+}
+EOF
