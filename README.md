@@ -20,21 +20,21 @@ Add nixnet as a flake input and call `mkTestbed` from `legacyPackages`:
       systems = [ "x86_64-linux" "aarch64-linux" ];
       perSystem = { pkgs, inputs', ... }: {
         packages.default = inputs'.nixnet.legacyPackages.mkTestbed {
-          packages = with pkgs; [ coreutils iperf3 ];
+          namespacePackages = with pkgs; [ coreutils iperf3 ];
           namespaces = {
             client = {
-              networking.interfaces.veth0.ipv4.addresses = [{ address = "10.0.0.1"; prefixLength = 24; }];
+              networking.interfaces.eth0.ipv4.addresses = [{ address = "10.0.0.1"; prefixLength = 24; }];
               scripts = [{ exec = "sleep 0.1; iperf3 -c 10.0.0.2"; await = true; }];
             };
             server = {
-              networking.interfaces.veth0.ipv4.addresses = [{ address = "10.0.0.2"; prefixLength = 24; }];
+              networking.interfaces.eth0.ipv4.addresses = [{ address = "10.0.0.2"; prefixLength = 24; }];
               scripts = [{ exec = "iperf3 -s"; }];
             };
           };
           veths = [{
             netem.lossPercent = 1;
-            a = { ns = "client"; iface = "veth0"; };
-            b = { ns = "server"; iface = "veth0"; };
+            a = { ns = "client"; iface = "eth0"; };
+            b = { ns = "server"; iface = "eth0"; };
           }];
         };
       };
@@ -79,9 +79,16 @@ nixnet is designed for lightweight, reproducible experiments that run real appli
 
 ## Examples
 
-- [ping](examples/ping/) — two namespaces, one veth link with netem delay
-- [iperf](examples/iperf/) — three namespaces with a forwarding router
-- [quiche_perf](examples/quiche_perf/) — QUIC throughput benchmark with rate-limited, delayed veth link
+See [examples/](examples/) for inspiration. Examples can be run directly without cloning:
+
+```shell
+nix run 'github:birneee/nixnet?dir=examples/ping'
+```
+
+Show mermaid graph:
+```shell
+nix build 'github:birneee/nixnet?dir=examples/ping#mermaid-svg' && xdg-open result
+```
 
 ## Options
 
@@ -100,7 +107,7 @@ All hooks run as root — use with care.
 
 ## Notes
 
-- Requires root (`sudo nix run`). When invoked via `sudo`, file operations (mkdir, output files) run as the original user (`$SUDO_USER`) so results are user-owned.
+- Root is not required for most features. Run with `nix run` as a regular user. Some features require root: eBPF/XDP programs need `CAP_NET_ADMIN` outside a user namespace — use `sudo nix run` for those.
 - Cleanup (SIGINT to all child processes, namespace deletion) happens automatically on exit.
 - Use `await = true` on a background script to block the testbed from exiting until that script finishes.
 - Use `foreground = true` for an interactive shell: `{ exec = "bash"; foreground = true; }`.
@@ -115,16 +122,16 @@ cat result
 ## Generate Mermaid Chart
 
 ```shell
-nix shell nixpkgs#mermaid-cli # if not installed already
-nix eval --raw .#legacyPackages.x86_64-linux.mermaid | mmdc -i -
+nix build .#mermaid && cat result
 ```
 
-live update
+Open as SVG:
 
 ```shell
-nix shell nixpkgs#mermaid-cli nixpkgs#watchexec # if not installed already
-watchexec -e nix -- 'nix eval --raw .#legacyPackages.x86_64-linux.mermaid | mmdc -i -'
+nix build .#mermaid-svg && xdg-open result
 ```
+
+> Tip: run `nix store gc` afterwards to clean up build artifacts.
 
 ## Todos
 - tmux for each namespace

@@ -1094,10 +1094,21 @@
                   ];
                 };
             in
-            {
+            rec {
               options = (lib.evalModules { modules = [ baseModule ]; }).options;
               mkTestbed = networkConfig: buildTestbed pkgs (evalConfig networkConfig).config;
-              mkMermaid = networkConfig: buildMermaid pkgs (evalConfig networkConfig).config;
+              mkMermaid = networkConfig: pkgs.writeText "topology.mmd" (buildMermaid pkgs (evalConfig networkConfig).config);
+              mkMermaidSvg =
+                networkConfig:
+                pkgs.runCommand "topology.svg"
+                  {
+                    buildInputs = [ pkgs.nodePackages.mermaid-cli ];
+                    FONTCONFIG_FILE = pkgs.makeFontsConf { fontDirectories = [ pkgs.liberation_ttf ]; };
+                    HOME = "/tmp";
+                  }
+                  ''
+                    mmdc -i ${mkMermaid networkConfig} -o $out
+                  '';
             };
         };
     };
