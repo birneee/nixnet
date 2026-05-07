@@ -87,7 +87,7 @@ nix run 'github:birneee/nixnet?dir=examples/ping'
 
 Show mermaid graph:
 ```shell
-nix build 'github:birneee/nixnet?dir=examples/ping#mermaid-svg' && xdg-open result
+xdg-open $(nix build 'github:birneee/nixnet?dir=examples/ping#mermaid-svg' --no-link --print-out-paths)
 ```
 
 ## Options
@@ -128,7 +128,7 @@ nix build .#mermaid && cat result
 Open as SVG:
 
 ```shell
-nix build .#mermaid-svg && xdg-open result
+xdg-open $(nix build .#mermaid-svg --no-link --print-out-paths)
 ```
 
 > Tip: run `nix store gc` afterwards to clean up build artifacts.
