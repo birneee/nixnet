@@ -13,22 +13,27 @@
         "aarch64-linux"
       ];
       perSystem =
-        { inputs', ... }:
+        { inputs', pkgs, ... }:
         let
           nixnet = inputs'.nixnet.legacyPackages;
-          config = {
-            bind = [
-              "/etc/hostname"
+          config = with nixnet; {
+            namespacePackages = [
+              pkgs.coreutils
+              (linkFarm "host-tools" [
+                {
+                  name = "bin/sh";
+                  path = hostBind "/bin/sh";
+                }
+              ])
             ];
             namespaces = {
               guest = {
-                bind = [
-                  "/bind/etc/hostname"
-                ];
                 scripts = [
                   {
                     exec = ''
-                      cat /bind/bind/etc/hostname | tee ./hostname.txt
+                      ${hostBind "/bin/sh"} -c 'echo hello from host sh'
+                      sh -c 'echo hello from host sh via PATH'
+                      cat ${hostBind "/etc/hostname"} | tee ./hostname.txt
                       cat /etc/hostname | tee ./guestname.txt
                     '';
                     await = true;

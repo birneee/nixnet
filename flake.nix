@@ -70,6 +70,12 @@
                         options = {
                           exec = lib.mkOption {
                             type = lib.types.str;
+                            example = lib.literalExpression ''
+                              ''''
+                                ''${pkgs.curl}/bin/curl https://example.com
+                                cat ''${nixnet.hostBind "/etc/os-release"}
+                              ''''
+                            '';
                             description = "Script to run in this namespace. May be multi-line.";
                           };
                           await = lib.mkOption {
@@ -108,11 +114,6 @@
                     type = lib.types.bool;
                     default = false;
                     description = "Bind the Wayland display socket and graphics devices into the sandbox, enabling GUI applications.";
-                  };
-                  bind = lib.mkOption {
-                    type = lib.types.listOf lib.types.str;
-                    default = [ ];
-                    description = "List of host paths to bind-mount into the sandbox at `/bind/<path>`.";
                   };
                 };
               }
@@ -231,11 +232,6 @@
             default = false;
             description = "Bind the Wayland display socket and graphics devices into the sandbox, enabling GUI applications.";
           };
-          bind = lib.mkOption {
-            type = lib.types.listOf lib.types.str;
-            default = [ ];
-            description = "List of host paths to bind-mount into the testbed sandbox at `/bind/<path>`.";
-          };
           preSetup = lib.mkOption {
             type = lib.types.str;
             default = "";
@@ -263,6 +259,12 @@
                 options = {
                   exec = lib.mkOption {
                     type = lib.types.str;
+                    example = lib.literalExpression ''
+                      ''''
+                        ''${pkgs.curl}/bin/curl https://example.com
+                        cat ''${nixnet.hostBind "/etc/os-release"}
+                      ''''
+                    '';
                     description = "Script to run in the testbed context (no network namespace). May be multi-line.";
                   };
                   foreground = lib.mkOption {
@@ -401,6 +403,36 @@
 
           mkPathLines = pkgs: lib.concatMapStringsSep "\n" (pkg: ''_PATH="${pkg}/bin:$_PATH"'') pkgs;
 
+          # Extract host paths embedded via nixnet.hostBind from a string's Nix context.
+          extractHostBinds =
+            str:
+            lib.concatMap (
+              storePath:
+              lib.optional
+                (lib.hasSuffix "-nixnet-hostbind" (baseNameOf storePath))
+                (lib.trim (builtins.readFile storePath))
+            ) (lib.attrNames (builtins.getContext str));
+
+          # Extract host bind paths from a nixnet.linkFarm package.
+          extractHostBindsFromPkg =
+            pkg:
+            if pkg._nixnetLinkFarm or false then
+              lib.concatMap extractHostBinds (pkg._binds or [ ])
+            else
+              [ ];
+
+          # Auto-collected host bind paths per namespace (from script exec strings + per-namespace packages + shared packages).
+          nsAutoHostBinds = lib.mapAttrs (
+            _nsName: nsCfg:
+            lib.unique (
+              lib.concatMap (scriptCfg: extractHostBinds scriptCfg.exec) nsCfg.scripts
+              ++ lib.concatMap extractHostBindsFromPkg (nsCfg.packages ++ tb.namespacePackages)
+            )
+          ) namespaces;
+
+          # Union of all namespace auto host bind paths.
+          tbAutoHostBinds = lib.unique (lib.concatLists (lib.attrValues nsAutoHostBinds));
+
           # Create namespaces (including bridge namespaces)
           nsCreateCommands =
             map (
@@ -413,7 +445,7 @@
                 nsPkgs = (nsCfg.packages or [ ]) ++ tb.namespacePackages;
                 nsPathLines = mkPathLines nsPkgs;
                 wayland = lib.optionalString (nsCfg != null && (nsCfg.shareWayland or false)) " \\\n  --wayland";
-                binds = lib.concatMapStrings (p: " \\\n  --bind '${p}' '/bind${p}'") (nsCfg.bind or [ ]);
+                binds = lib.concatMapStrings (p: " \\\n  --bind '/host${p}' '/host${p}'") (nsAutoHostBinds.${name} or [ ]);
               in
               lib.concatStringsSep "\n" (
                 [ "_PATH=\"\" # clear path" ]
@@ -924,7 +956,7 @@
               jailFlags =
                 [ ''--setenv "PATH=$PATH"'' ]
                 ++ lib.optional tb.shareWayland "--wayland"
-                ++ map (p: "--bind '${p}' '/bind${p}'") tb.bind
+                ++ map (p: "--bind '${p}' '/host${p}'") tbAutoHostBinds
                 ++ lib.optionals (workDir != null) [
                   ''--bind "$_WORK_DIR" /pwd''
                   "--chdir /pwd"
@@ -1079,6 +1111,25 @@
             in
             rec {
               options = (lib.evalModules { modules = [ baseModule ]; }).options;
+              # Returns the path where p will be bind-mounted inside the jail (/host<p>).
+              # The store file marker embeds p in the string's Nix context without changing
+              # its value, allowing extractHostBinds to recover p at eval time.
+              hostBind =
+                p:
+                let
+                  marker = builtins.toFile "nixnet-hostbind" p;
+                in
+                "/host${p}${builtins.substring 0 0 marker}";
+              # Like pkgs.linkFarm but entries with hostBind paths are automatically
+              # detected and bind-mounted into namespaces at /host/...
+              linkFarm =
+                name: entries:
+                (pkgs.linkFarm name entries).overrideAttrs (_: {
+                  passthru = {
+                    _nixnetLinkFarm = true;
+                    _binds = map (e: e.path) entries;
+                  };
+                });
               mkTestbed = networkConfig: buildTestbed pkgs jail_pkg (evalConfig networkConfig).config;
               mkMermaid =
                 networkConfig: pkgs.writeText "topology.mmd" (buildMermaid pkgs (evalConfig networkConfig).config);

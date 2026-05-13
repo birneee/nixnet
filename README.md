@@ -45,7 +45,7 @@ Add nixnet as a flake input and call `mkTestbed` from `legacyPackages`:
 Run with:
 
 ```
-sudo nix run
+nix run
 ```
 
 ## Features
@@ -58,7 +58,8 @@ sudo nix run
 - **ARP control** — disable ARP or prefill tables with peer MACs
 - **Repeatable** — repeat with `sudo nix run . 1-5`; `{}` in `workDir` becomes a run index
 - **Foreground scripts** — full terminal access for interactive tools
-- **Sandboxing** — scripts are isolated with Linux namespaces to prevent side effects; configurable filesystem, environment, and PATH sharing
+- **Sandboxing** — experiments are isolated with Linux namespaces to prevent side effects
+- **Host binds** — expose host directories, files and binaries inside namespaces via `hostBind`
 - **Automatic cleanup** — namespaces and processes cleaned up on exit
 - **Mermaid diagrams** — topology diagram from config
 
