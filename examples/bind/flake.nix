@@ -19,6 +19,7 @@
           config = with nixnet; {
             namespacePackages = [
               pkgs.coreutils
+              pkgs.file
               (linkFarm "host-tools" [
                 {
                   name = "bin/sh";
@@ -31,8 +32,12 @@
                 scripts = [
                   {
                     exec = ''
-                      ${hostBind "/bin/sh"} -c 'echo hello from host sh'
-                      sh -c 'echo hello from host sh via PATH'
+                      file ${hostBind "/bin/sh"}
+                      file ${pkgs.bash}/bin/sh
+                      file $(readlink -f ${pkgs.bash}/bin/sh)
+                      file $(command -v sh)
+                      file $(readlink -f $(command -v sh))
+                      
                       cat ${hostBind "/etc/hostname"} | tee ./hostname.txt
                       cat /etc/hostname | tee ./guestname.txt
                     '';
