@@ -25,6 +25,7 @@ jobs:
           - name: ping
           - name: quiche_perf
           - name: route_metric
+          - name: msquic
           - name: star_topology
           - name: tcpdump
           #- name: chromium # requires display
