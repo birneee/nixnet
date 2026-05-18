@@ -34,6 +34,8 @@ jobs:
       - uses: actions/checkout@v6
       - uses: DeterminateSystems/nix-installer-action@v22
       - name: Configure kernel
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo sysctl -w kernel.perf_event_paranoid=1
       - name: Run ${{ matrix.example.name }}
         run: ${{ matrix.example.sudo && 'sudo $(which nix)' || 'nix' }} run ./examples/${{ matrix.example.name }} --override-input nixnet path:.
