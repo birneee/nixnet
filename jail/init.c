@@ -1,3 +1,5 @@
+// PID 1 for named jails: blocks all signals and sleeps forever to keep the
+// pid namespace alive until the jail is explicitly destroyed.
 #include <signal.h>
 #include <unistd.h>
 

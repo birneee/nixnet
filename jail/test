@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Minimal nested jail sample similar to how nixnet uses jails.
+
+_PATH=""
+_PATH="$(dirname "$(command -v cat)"):$_PATH"
+_PATH="$(dirname "$(command -v bash)"):$_PATH"
+_PATH="$(dirname "$(command -v jail)"):$_PATH"
+
+jail exec --setenv "PATH=$_PATH" bash -c "jail add --setenv PATH=$_PATH test; jail enter test bash -c 'cat /etc/hostname'"

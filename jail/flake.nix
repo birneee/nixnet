@@ -18,12 +18,12 @@
           deps = with pkgs; [
             bash
             coreutils
+            gnused
             util-linux
-            iproute2
           ];
           jail = pkgs.writeShellApplication {
             name = "jail";
-            runtimeInputs = deps;
+            runtimeInputs = deps ++ [ jail_init ];
             text = builtins.readFile ./jail;
           };
           jail_setup = pkgs.writeShellApplication {
@@ -37,12 +37,23 @@
           '';
         in
         {
-          packages.default = pkgs.runCommand "jail" { } ''
-            mkdir -p $out/bin
-            cp ${jail}/bin/jail $out/bin/jail
-            cp ${jail_setup}/bin/jail_setup $out/bin/jail_setup
-            cp ${jail_init}/bin/init $out/bin/init
-          '';
+          packages = rec {
+            default = pkgs.runCommand "jail" { } ''
+              mkdir -p $out/bin
+              cp ${jail}/bin/jail $out/bin/jail
+              cp ${jail_setup}/bin/jail_setup $out/bin/jail_setup
+              cp ${jail_init}/bin/init $out/bin/init
+            '';
+            test = pkgs.writeShellApplication {
+              name = "jail-test";
+              runtimeInputs = [
+                pkgs.coreutils
+                pkgs.bash
+                default
+              ];
+              text = builtins.readFile ./test;
+            };
+          };
         };
     };
 }
