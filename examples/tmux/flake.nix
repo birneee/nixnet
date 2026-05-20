@@ -55,16 +55,26 @@
                 exec = ''
                   SOCKET=/tmp/nixnet.sock
                   SESSION=nixnet
-                  tmux -S $SOCKET -f ${./tmux.conf} new-session -d -s $SESSION -n "client" -- jail enter client bash
-                  tmux -S $SOCKET new-window -t $SESSION -n "server" -- jail enter server bash
-                  MENU_CMD='display-menu -T " New " -x 0 -y S \
-                    "client" a "new-window -n client \"jail enter client bash\"" \
-                    "server" b "new-window -n server \"jail enter server bash\"" \
-                    "" \
-                    "Exit Lab" q "confirm-before -p \"Exit session? (y/n)\" detach-client"'
+                  MENU_CMD='display-menu -T " New " -x 0 -y S'
+                  _new_session=true
+                  i=0
+                  for ns in /pwd/*; do
+                    if [ ! -d "$ns" ]; then continue; fi
+                    ns="$(basename -- "$ns")"
+                    if  [ "$_new_session" = true ]; then
+                        tmux -S $SOCKET -f ${./tmux.conf} new-session -d -s $SESSION -n "$ns" -- jail enter "$ns" bash
+                        _new_session=false
+                    else
+                        tmux -S $SOCKET new-window -t $SESSION -n "$ns" -- jail enter "$ns" bash
+                    fi
+                    MENU_CMD="$MENU_CMD \"$ns\" \"$i\" \"new-window -n $ns -- jail enter $ns bash\""
+                    i=$((i+1))
+                  done
+                  MENU_CMD="$MENU_CMD \"\"" # divider in menu
+                  MENU_CMD="$MENU_CMD \"Exit Lab\" q \"confirm-before -p \\\"Exit session? (y/n)\\\" detach-client\""
                   tmux -S $SOCKET bind-key m "$MENU_CMD"
                   tmux -S $SOCKET bind-key -n MouseDown1StatusLeft "$MENU_CMD"
-                  tmux -S /tmp/nixnet.sock attach-session -t nixnet
+                  tmux -S /tmp/nixnet.sock attach-session -t $SESSION
                 '';
               }
             ];
