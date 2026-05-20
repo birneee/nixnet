@@ -18,6 +18,25 @@
         "type": "github"
       }
     },
+    "jail": {
+      "inputs": {
+        "flake-parts": [
+          "flake-parts"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "path": "./jail",
+        "type": "path"
+      },
+      "original": {
+        "path": "./jail",
+        "type": "path"
+      },
+      "parent": []
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1771848320,
@@ -52,6 +71,7 @@
     "root": {
       "inputs": {
         "flake-parts": "flake-parts",
+        "jail": "jail",
         "nixpkgs": "nixpkgs"
       }
     }
