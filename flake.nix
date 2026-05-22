@@ -424,6 +424,28 @@
           # Union of all namespace auto host bind paths.
           tbAutoHostBinds = lib.unique (lib.concatLists (lib.attrValues nsAutoHostBinds));
 
+          # Extract pipe names embedded via nixnet.pipe from a string's Nix context.
+          extractPipes =
+            str:
+            lib.concatMap (
+              storePath:
+              lib.optional (lib.hasSuffix "-nixnet-pipe" (baseNameOf storePath)) (
+                lib.trim (builtins.readFile storePath)
+              )
+            ) (lib.attrNames (builtins.getContext str));
+
+          # Auto-collected pipe names per namespace (from script exec strings).
+          nsAutoPipes = lib.mapAttrs (
+            _nsName: nsCfg: lib.unique (lib.concatMap (scriptCfg: extractPipes scriptCfg.exec) nsCfg.scripts)
+          ) namespaces;
+
+          # Union of all pipe names across all namespaces.
+          allPipes = lib.unique (lib.concatLists (lib.attrValues nsAutoPipes));
+
+          # Create named pipes in the testbed namespace before namespaces are created.
+          pipeCreateCommands =
+            lib.optional (allPipes != [ ]) "mkdir -p /pipe" ++ map (name: "mkfifo /pipe/${name}") allPipes;
+
           # Create namespaces (including bridge namespaces)
           nsCreateCommands =
             map (
@@ -439,6 +461,9 @@
                 binds = lib.concatMapStrings (p: " \\\n  --bind '/host${p}' '/host${p}'") (
                   nsAutoHostBinds.${name} or [ ]
                 );
+                pipeBinds = lib.concatMapStrings (p: " \\\n  --bind '/pipe/${p}' '/pipe/${p}'") (
+                  nsAutoPipes.${name} or [ ]
+                );
               in
               lib.concatStringsSep "\n" (
                 [ "_PATH=\"\" # clear path" ]
@@ -447,7 +472,7 @@
                 ++ [
                   "jail add \\\n  --setenv PATH=$_PATH${
                     lib.optionalString (dir != "") " \\\n  --bind '${dir}' /pwd \\\n  --chdir /pwd"
-                  }${wayland}${binds} \\\n  ${name}"
+                  }${wayland}${binds}${pipeBinds} \\\n  ${name}"
                 ]
               )
             ) (lib.attrNames namespaces)
@@ -754,6 +779,7 @@
           setupPhaseSections = lib.concatStringsSep "\n\n" (
             lib.filter (s: s != "") [
               (mkBashSection "pre-setup hook" [ tb.preSetup ])
+              (mkBashSection "create pipes" pipeCreateCommands)
               (mkBashSection "create namespaces" nsCreateCommands)
               (mkBashSection "namespace pre-setup hooks" nsPreSetupCommands)
               (mkBashSection "sysctl settings" nsSysctlCommands)
@@ -1123,6 +1149,15 @@
                   marker = builtins.toFile "nixnet-hostbind" p;
                 in
                 "/host${p}${builtins.substring 0 0 marker}";
+              # Returns the path of a named pipe inside namespaces (/pipe/<name>).
+              # The store file marker embeds the name in the string's Nix context,
+              # allowing extractPipes to detect which namespaces use which pipes.
+              pipe =
+                name:
+                let
+                  marker = builtins.toFile "nixnet-pipe" name;
+                in
+                "/pipe/${name}${builtins.substring 0 0 marker}";
               # Like pkgs.linkFarm but entries with hostBind paths are automatically
               # detected and bind-mounted into namespaces at /host/...
               linkFarm =
