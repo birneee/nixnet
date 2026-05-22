@@ -2,13 +2,6 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
-    jail = {
-      url = "path:./jail";
-      inputs = {
-        nixpkgs.follows = "nixpkgs";
-        flake-parts.follows = "flake-parts";
-      };
-    };
   };
 
   outputs =
@@ -409,18 +402,15 @@
             str:
             lib.concatMap (
               storePath:
-              lib.optional
-                (lib.hasSuffix "-nixnet-hostbind" (baseNameOf storePath))
-                (lib.trim (builtins.readFile storePath))
+              lib.optional (lib.hasSuffix "-nixnet-hostbind" (baseNameOf storePath)) (
+                lib.trim (builtins.readFile storePath)
+              )
             ) (lib.attrNames (builtins.getContext str));
 
           # Extract host bind paths from a nixnet.linkFarm package.
           extractHostBindsFromPkg =
             pkg:
-            if pkg._nixnetLinkFarm or false then
-              lib.concatMap extractHostBinds (pkg._binds or [ ])
-            else
-              [ ];
+            if pkg._nixnetLinkFarm or false then lib.concatMap extractHostBinds (pkg._binds or [ ]) else [ ];
 
           # Auto-collected host bind paths per namespace (from script exec strings + per-namespace packages + shared packages).
           nsAutoHostBinds = lib.mapAttrs (
@@ -446,7 +436,9 @@
                 nsPkgs = (nsCfg.packages or [ ]) ++ tb.namespacePackages;
                 nsPathLines = mkPathLines nsPkgs;
                 wayland = lib.optionalString (nsCfg != null && (nsCfg.shareWayland or false)) " \\\n  --wayland";
-                binds = lib.concatMapStrings (p: " \\\n  --bind '/host${p}' '/host${p}'") (nsAutoHostBinds.${name} or [ ]);
+                binds = lib.concatMapStrings (p: " \\\n  --bind '/host${p}' '/host${p}'") (
+                  nsAutoHostBinds.${name} or [ ]
+                );
               in
               lib.concatStringsSep "\n" (
                 [ "_PATH=\"\" # clear path" ]
@@ -961,14 +953,15 @@
           )
           + (
             let
-              jailFlags =
-                [ ''--setenv "PATH=$PATH"'' ]
-                ++ lib.optional tb.shareWayland "--wayland"
-                ++ map (p: "--bind '${p}' '/host${p}'") tbAutoHostBinds
-                ++ lib.optionals (workDir != null) [
-                  ''--bind "$_WORK_DIR" /pwd''
-                  "--chdir /pwd"
-                ];
+              jailFlags = [
+                ''--setenv "PATH=$PATH"''
+              ]
+              ++ lib.optional tb.shareWayland "--wayland"
+              ++ map (p: "--bind '${p}' '/host${p}'") tbAutoHostBinds
+              ++ lib.optionals (workDir != null) [
+                ''--bind "$_WORK_DIR" /pwd''
+                "--chdir /pwd"
+              ];
             in
             ''
               install -m 0755 ${pkgs.writeScript name ''
@@ -980,27 +973,29 @@
                 export PATH="$_PATH"
 
                 ${concatNonEmpty [
-                  (if hasTemplate then
-                    ''
-                      IFS='-' read -r _START _END <<< "''${1:-}"
-                      if [ -n "$_END" ]; then
-                        for _RUN_NUM in $(seq "$_START" "$_END"); do
-                          "$0" "$_RUN_NUM" || true
-                        done
-                        exit 0
-                      fi
-                      _RUN_NUM=''${_START:-0}
-                      _WORK_DIR_TPL='${workDir}'
-                      _WORK_DIR="''${_WORK_DIR_TPL//\{run\}/$(printf "%02d" "$_RUN_NUM")}"
-                      while [ -z "''${1:-}" ] && [ -e "$_WORK_DIR" ]; do
-                        _RUN_NUM=$((_RUN_NUM+1))
+                  (
+                    if hasTemplate then
+                      ''
+                        IFS='-' read -r _START _END <<< "''${1:-}"
+                        if [ -n "$_END" ]; then
+                          for _RUN_NUM in $(seq "$_START" "$_END"); do
+                            "$0" "$_RUN_NUM" || true
+                          done
+                          exit 0
+                        fi
+                        _RUN_NUM=''${_START:-0}
+                        _WORK_DIR_TPL='${workDir}'
                         _WORK_DIR="''${_WORK_DIR_TPL//\{run\}/$(printf "%02d" "$_RUN_NUM")}"
-                      done
-                    ''
-                  else
-                    lib.optionalString (workDir != null) ''
-                      _WORK_DIR='${workDir}'
-                    '')
+                        while [ -z "''${1:-}" ] && [ -e "$_WORK_DIR" ]; do
+                          _RUN_NUM=$((_RUN_NUM+1))
+                          _WORK_DIR="''${_WORK_DIR_TPL//\{run\}/$(printf "%02d" "$_RUN_NUM")}"
+                        done
+                      ''
+                    else
+                      lib.optionalString (workDir != null) ''
+                        _WORK_DIR='${workDir}'
+                      ''
+                  )
                   (lib.optionalString (workDir != null) ''
                     mkdir -p "$_WORK_DIR"
                     echo "testbed| workdir: $(realpath "$_WORK_DIR")"'')
@@ -1079,9 +1074,9 @@
       ];
 
       perSystem =
-        { pkgs, lib, inputs', ... }:
+        { pkgs, lib, ... }:
         let
-          jail_pkg = inputs'.jail.packages.default;
+          jail_pkg = pkgs.callPackage ./jail/pkgs/jail.nix { };
         in
         {
           packages.nixnet-option-docs =
