@@ -398,16 +398,31 @@
           mkPathLines = pkgs: lib.concatMapStringsSep "\n" (pkg: ''_PATH="${pkg}/bin:$_PATH"'') pkgs;
 
           # Extract host paths embedded via nixnet.hostBind from a string's Nix context.
+          # Returns list of AttrSet { path: string; readonly: bool;}
           extractHostBinds =
             str:
             lib.concatMap (
               storePath:
-              lib.optional (lib.hasSuffix "-nixnet-hostbind" (baseNameOf storePath)) (
-                lib.trim (builtins.readFile storePath)
-              )
+              if (lib.hasSuffix "-nixnet-hostbind" (baseNameOf storePath)) then
+                [
+                  {
+                    path = lib.trim (builtins.readFile storePath);
+                    readonly = false;
+                  }
+                ]
+              else if (lib.hasSuffix "-nixnet-ro-hostbind" (baseNameOf storePath)) then
+                [
+                  {
+                    path = lib.trim (builtins.readFile storePath);
+                    readonly = true;
+                  }
+                ]
+              else
+                [ ]
             ) (lib.attrNames (builtins.getContext str));
 
           # Extract host bind paths from a nixnet.linkFarm package.
+          # Returns list of AttrSet { path: string; readonly: bool;}
           extractHostBindsFromPkg =
             pkg:
             if pkg._nixnetLinkFarm or false then lib.concatMap extractHostBinds (pkg._binds or [ ]) else [ ];
@@ -436,9 +451,13 @@
                 nsPkgs = (nsCfg.packages or [ ]) ++ tb.namespacePackages;
                 nsPathLines = mkPathLines nsPkgs;
                 wayland = lib.optionalString (nsCfg != null && (nsCfg.shareWayland or false)) " \\\n  --wayland";
-                binds = lib.concatMapStrings (p: " \\\n  --bind '/host${p}' '/host${p}'") (
-                  nsAutoHostBinds.${name} or [ ]
-                );
+                binds = lib.concatMapStrings (
+                  binding:
+                  if binding.readonly then
+                    " \\\n  --ro-bind '/ro-host${binding.path}' '/ro-host${binding.path}'"
+                  else
+                    " \\\n  --bind '/host${binding.path}' '/host${binding.path}'"
+                ) (nsAutoHostBinds.${name} or [ ]);
               in
               lib.concatStringsSep "\n" (
                 [ "_PATH=\"\" # clear path" ]
@@ -919,94 +938,102 @@
           dontUnpack = true;
           strictDeps = true;
           nativeBuildInputs = [ ];
-          installPhase = ''
-            mkdir -p $out/bin
-          ''
-          + lib.concatStrings (
-            lib.mapAttrsToList (
-              nsName: nsCfg:
-              lib.concatStrings (
-                lib.imap0 (
-                  idx: _scriptCfg:
-                  let
-                    scriptFile = builtins.elemAt nsScriptFiles.${nsName} idx;
-                  in
-                  ''
-                    mkdir -p $out/namespaces/${nsName}/scripts
-                    install -m 0755 ${scriptFile} $out/namespaces/${nsName}/scripts/${toString idx}
-                  ''
-                ) nsCfg.scripts
-              )
-            ) namespaces
-          )
-          + lib.concatStrings (
-            lib.imap0 (
-              idx: _scriptCfg:
+          installPhase =
+            ''
+              mkdir -p $out/bin
+            ''
+            + lib.concatStrings (
+              lib.mapAttrsToList (
+                nsName: nsCfg:
+                lib.concatStrings (
+                  lib.imap0 (
+                    idx: _scriptCfg:
+                    let
+                      scriptFile = builtins.elemAt nsScriptFiles.${nsName} idx;
+                    in
+                    ''
+                      mkdir -p $out/namespaces/${nsName}/scripts
+                      install -m 0755 ${scriptFile} $out/namespaces/${nsName}/scripts/${toString idx}
+                    ''
+                  ) nsCfg.scripts
+                )
+              ) namespaces
+            )
+            + lib.concatStrings (
+              lib.imap0 (
+                idx: _scriptCfg:
+                let
+                  scriptFile = builtins.elemAt tbScriptFiles idx;
+                in
+                ''
+                  mkdir -p $out/scripts
+                  install -m 0755 ${scriptFile} $out/scripts/${toString idx}
+                ''
+              ) tb.scripts
+            )
+            + (
               let
-                scriptFile = builtins.elemAt tbScriptFiles idx;
+                jailFlags =
+                  [
+                    ''--setenv "PATH=$PATH"''
+                  ]
+                  ++ lib.optional tb.shareWayland "--wayland"
+                  ++ map (
+                    binding:
+                    if binding.readonly then
+                      "--ro-bind '${binding.path}' '/ro-host${binding.path}'"
+                    else
+                      "--bind '${binding.path}' '/host${binding.path}'"
+                  ) tbAutoHostBinds
+                  ++ lib.optionals (workDir != null) [
+                    ''--bind "$_WORK_DIR" /pwd''
+                    "--chdir /pwd"
+                  ];
               in
               ''
-                mkdir -p $out/scripts
-                install -m 0755 ${scriptFile} $out/scripts/${toString idx}
-              ''
-            ) tb.scripts
-          )
-          + (
-            let
-              jailFlags = [
-                ''--setenv "PATH=$PATH"''
-              ]
-              ++ lib.optional tb.shareWayland "--wayland"
-              ++ map (p: "--bind '${p}' '/host${p}'") tbAutoHostBinds
-              ++ lib.optionals (workDir != null) [
-                ''--bind "$_WORK_DIR" /pwd''
-                "--chdir /pwd"
-              ];
-            in
-            ''
-              install -m 0755 ${pkgs.writeScript name ''
-                #!${pkgs.bash}/bin/bash
-                set -euo pipefail
+                install -m 0755 ${pkgs.writeScript name ''
+                  #!${pkgs.bash}/bin/bash
+                  set -euo pipefail
 
-                _PATH="" # clear path
-                ${mkPathLines (tb.testbedPackages ++ [ jail_pkg ])}
-                export PATH="$_PATH"
+                  _PATH="" # clear path
+                  ${mkPathLines (tb.testbedPackages ++ [ jail_pkg ])}
+                  export PATH="$_PATH"
 
-                ${concatNonEmpty [
-                  (
-                    if hasTemplate then
-                      ''
-                        IFS='-' read -r _START _END <<< "''${1:-}"
-                        if [ -n "$_END" ]; then
-                          for _RUN_NUM in $(seq "$_START" "$_END"); do
-                            "$0" "$_RUN_NUM" || true
-                          done
-                          exit 0
-                        fi
-                        _RUN_NUM=''${_START:-0}
-                        _WORK_DIR_TPL='${workDir}'
-                        _WORK_DIR="''${_WORK_DIR_TPL//\{run\}/$(printf "%02d" "$_RUN_NUM")}"
-                        while [ -z "''${1:-}" ] && [ -e "$_WORK_DIR" ]; do
-                          _RUN_NUM=$((_RUN_NUM+1))
+                  ${concatNonEmpty [
+                    (
+                      if hasTemplate then
+                        ''
+                          IFS='-' read -r _START _END <<< "''${1:-}"
+                          if [ -n "$_END" ]; then
+                            for _RUN_NUM in $(seq "$_START" "$_END"); do
+                              "$0" "$_RUN_NUM" || true
+                            done
+                            exit 0
+                          fi
+                          _RUN_NUM=''${_START:-0}
+                          _WORK_DIR_TPL='${workDir}'
                           _WORK_DIR="''${_WORK_DIR_TPL//\{run\}/$(printf "%02d" "$_RUN_NUM")}"
-                        done
-                      ''
-                    else
-                      lib.optionalString (workDir != null) ''
-                        _WORK_DIR='${workDir}'
-                      ''
-                  )
-                  (lib.optionalString (workDir != null) ''
-                    mkdir -p "$_WORK_DIR"
-                    echo "testbed| workdir: $(realpath "$_WORK_DIR")"'')
-                ]}
+                          while [ -z "''${1:-}" ] && [ -e "$_WORK_DIR" ]; do
+                            _RUN_NUM=$((_RUN_NUM+1))
+                            _WORK_DIR="''${_WORK_DIR_TPL//\{run\}/$(printf "%02d" "$_RUN_NUM")}"
+                          done
+                        ''
+                      else
+                        lib.optionalString (workDir != null) ''
+                          _WORK_DIR='${workDir}'
+                        ''
+                    )
+                    (lib.optionalString (workDir != null) ''
+                      mkdir -p "$_WORK_DIR"
+                      echo "testbed| workdir: $(realpath "$_WORK_DIR")"'')
+                  ]}
 
-                exec jail exec \
-                  ${lib.concatStringsSep " \\\n  " (jailFlags ++ [ "\"$(dirname \"$0\")/.${name}-wrapped\"" ])}
-              ''} $out/bin/${name}
-              install -m 0755 ${pkgs.writeScript "${name}-wrapped" scriptText} $out/bin/.${name}-wrapped
-            ''
-          );
+                  exec jail exec \
+                    ${lib.concatStringsSep " \\\n  " (jailFlags ++ [ "\"$(dirname \"$0\")/.${name}-wrapped\"" ])}
+                ''} $out/bin/${name}
+                install -m 0755 ${pkgs.writeScript "${name}-wrapped" scriptText} $out/bin/.${name}-wrapped
+              ''
+            );
           meta.mainProgram = name;
         };
       buildMermaid =
@@ -1123,8 +1150,19 @@
                   marker = builtins.toFile "nixnet-hostbind" p;
                 in
                 "/host${p}${builtins.substring 0 0 marker}";
-              # Like pkgs.linkFarm but entries with hostBind paths are automatically
-              # detected and bind-mounted into namespaces at /host/...
+
+              # Returns the path where p will be readonly bind-mounted inside the jail (/ro-host<p>).
+              # The store file marker embeds p in the string's Nix context without changing
+              # its value, allowing extractHostBinds to recover p at eval time.
+              roHostBind =
+                p:
+                let
+                  marker = builtins.toFile "nixnet-ro-hostbind" p;
+                in
+                "/ro-host${p}${builtins.substring 0 0 marker}";
+
+              # Like pkgs.linkFarm but entries with hostBind or roHostBind paths are automatically
+              # detected and bind-mounted into namespaces at /host/... or /ro-host/..., respectively
               linkFarm =
                 name: entries:
                 (pkgs.linkFarm name entries).overrideAttrs (_: {
