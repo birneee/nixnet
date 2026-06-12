@@ -915,6 +915,13 @@
                 if [ -e "/proc/$PID" ]; then
                   kill -INT -- -"$PID" 2>/dev/null || true
                   echo "testbed| PID $PID killed"
+                  _deadline=$((SECONDS + 5))
+                  while [ -e "/proc/$PID" ] && (( SECONDS < _deadline )); do
+                    sleep 0.1
+                  done
+                  if [ -e "/proc/$PID" ]; then
+                    kill -KILL -- -"$PID" 2>/dev/null || true
+                  fi
                   wait "$PID" || true
                 else
                   _EXIT=0
