@@ -150,24 +150,22 @@ in
     nodePackages = lib.mkOption {
       type = lib.types.listOf lib.types.package;
       default = with pkgs; [
-        bash
+        bashNonInteractive
         coreutils
         gnused
         iproute2
-        procps
-        util-linux
+        util-linuxMinimal
       ];
       description = "Packages prepended to PATH for all nodes. Lower priority than node-level packages. Defaults to a set of standard tools; extend with \`lib.mkOptionDefault [ yourPkg ]\`.";
     };
     testbedPackages = lib.mkOption {
       type = lib.types.listOf lib.types.package;
       default = with pkgs; [
-        bash
+        bashNonInteractive
         coreutils
         gnused
         iproute2
-        procps
-        util-linux
+        util-linuxMinimal
       ];
       description = "Packages prepended to PATH for testbed hooks (preSetup, postSetup, preRun, postRun) and testbed-level scripts. Defaults to a set of standard tools; extend with \`lib.mkOptionDefault [ yourPkg ]\`.";
     };

@@ -9,7 +9,7 @@ let
   mkScriptFile =
     nodeName: scriptName: scriptCfg:
     pkgs.writeScript "${name}-script-${nodeName}-${scriptName}" ''
-      #!${pkgs.bash}/bin/bash
+      #!${pkgs.bashNonInteractive}/bin/bash
       set -euo pipefail
       ${scriptCfg.exec}
     '';

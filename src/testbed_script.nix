@@ -9,7 +9,6 @@ let
         gnugrep
         gawk
         findutils
-        inetutils
       ];
       text = builtins.readFile ./write_run_json;
     }).outPath
@@ -494,7 +493,7 @@ let
   );
 
   scriptText = ''
-    #!${pkgs.bash}/bin/bash
+    #!${pkgs.bashNonInteractive}/bin/bash
     set -o errexit
     set -o nounset
     set -o pipefail

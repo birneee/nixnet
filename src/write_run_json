@@ -21,7 +21,7 @@ load="$(cut -d' ' -f1-3 /proc/loadavg)"
 kernel="$(uname -r)"
 kernel_full="$(uname -srvm)"
 arch="$(uname -m)"
-hostname="$(hostname)"
+hostname="$(uname -n)"
 
 # Dump all scalar /proc/sys/net values, skipping per-interface conf/ and neigh/ subtrees.
 # Tries to parse value as JSON number/array, falls back to quoted string.

@@ -79,7 +79,7 @@ pkgs.stdenv.mkDerivation {
     in
     ''
       install -m 0755 ${pkgs.writeScript name ''
-        #!${pkgs.bash}/bin/bash
+        #!${pkgs.bashNonInteractive}/bin/bash
         set -euo pipefail
 
         _PATH="" # clear path
@@ -115,8 +115,9 @@ pkgs.stdenv.mkDerivation {
             echo "testbed| workdir: $(realpath "$_WORK_DIR")"'')
         ]}
 
+        _SELF="$(readlink -f "$0")"
         exec jail exec \
-          ${lib.concatStringsSep " \\\n  " (jailFlags ++ [ "\"$(dirname \"$0\")/.${name}-wrapped\"" ])}
+          ${lib.concatStringsSep " \\\n  " (jailFlags ++ [ "\"$(dirname \"$_SELF\")/.${name}-wrapped\"" ])}
       ''} $out/bin/${name}
       install -m 0755 ${pkgs.writeScript "${name}-wrapped" gen.scriptText} $out/bin/.${name}-wrapped
     ''
