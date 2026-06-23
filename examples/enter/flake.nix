@@ -17,7 +17,9 @@
             workDir = null;
             testbedPackages = pkgs.lib.mkOptionDefault [ pkgs.gnugrep ];
             nodes = {
-              client = { };
+              client = {
+                packages = [ pkgs.procps ];
+              };
             };
             scripts.check-init = {
               foreground = true;
