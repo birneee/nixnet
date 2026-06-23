@@ -4,11 +4,9 @@ let
   writeRunJson =
     (pkgs.writeShellApplication {
       name = "write_run_json";
-      runtimeInputs = with pkgs; [
-        coreutils
-        gnugrep
-        gawk
-        findutils
+      runtimeInputs = [
+        pkgs.coreutils
+        busyboxMini
       ];
       text = builtins.readFile ./write_run_json;
     }).outPath
@@ -35,6 +33,7 @@ let
       null;
 
   inherit (import ./common.nix { inherit pkgs; })
+    busyboxMini
     concatNonEmpty
     mkPathLines
     resolveFirst

@@ -12,6 +12,17 @@ in
   # Emit `_PATH="<pkg>/bin:$_PATH"` lines for prepending packages to PATH.
   mkPathLines = pkgs: lib.concatMapStringsSep "\n" (pkg: ''_PATH="${pkg}/bin:$_PATH"'') pkgs;
 
+  # Just the busybox applets actually needed anywhere in nixnet (sysctl, jail's
+  # sed, write_run_json's grep/awk/find/xargs/sed), not all ~400 of them (which
+  # would risk shadowing same-named tools elsewhere, e.g. busybox's own
+  # `ping`/`mount`/`kill`/`init`).
+  busyboxMini = pkgs.linkFarm "busybox-mini" (
+    map (n: {
+      name = "bin/${n}";
+      path = "${pkgs.busybox}/bin/${n}";
+    }) [ "sed" "sysctl" "grep" "awk" "find" "xargs" ]
+  );
+
   # Pick the first non-null value for `field` from a priority-ordered list of attrsets (nulls skipped).
   resolveFirst =
     field: sources:

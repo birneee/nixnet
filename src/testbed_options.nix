@@ -20,6 +20,7 @@ let
 
   nixosSysctlOption = nixosOpts.boot.kernel.sysctl;
   netem = import ./netem_options.nix { inherit pkgs; };
+  inherit (import ./common.nix { inherit pkgs; }) busyboxMini;
 
   iface = lib.types.submodule {
     options = {
@@ -150,9 +151,9 @@ in
     nodePackages = lib.mkOption {
       type = lib.types.listOf lib.types.package;
       default = with pkgs; [
+        busyboxMini
         bashNonInteractive
         coreutils
-        gnused
         iproute2
         util-linuxMinimal
       ];
@@ -161,9 +162,9 @@ in
     testbedPackages = lib.mkOption {
       type = lib.types.listOf lib.types.package;
       default = with pkgs; [
+        busyboxMini
         bashNonInteractive
         coreutils
-        gnused
         iproute2
         util-linuxMinimal
       ];
