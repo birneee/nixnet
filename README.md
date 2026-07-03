@@ -5,8 +5,9 @@
 Reproducible network experiments with a single command, on a single machine — no manual dependency installation, no manual setup, no manual cleanup, repeat anywhere at any time with exactly the same binaries. Define nodes, links, and scripts with the Nix language.
 
 ## Usage
+1. If not available in your machine, install [Nix](https://nixos.org/download/) first.
 
-Add nixnet as a [flake](https://nixos.wiki/wiki/Flakes) input and call `mkExperiment` from `legacyPackages`:
+2. Add nixnet as a [flake](https://nixos.wiki/wiki/Flakes) input and call `mkExperiment` from `legacyPackages`:
 
 ```nix
 {
@@ -49,7 +50,7 @@ Add nixnet as a [flake](https://nixos.wiki/wiki/Flakes) input and call `mkExperi
 }
 ```
 
-Run with:
+3. Run
 
 ```
 nix run
