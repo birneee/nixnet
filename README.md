@@ -13,14 +13,20 @@ Add nixnet as a [flake](https://nixos.wiki/wiki/Flakes) input and call `mkExperi
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
-    nixnet.url = "github:birneee/nixnet";
+    nixnet.url = "github:birneee/nixnet";                # <-- Adding nixnet here
   };
   outputs = inputs@{ flake-parts, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [ "x86_64-linux" "aarch64-linux" ];
       perSystem = { pkgs, inputs', ... }: {
+
+        # EXPERIMENT: Define the virtual network lab
         packages.default = inputs'.nixnet.legacyPackages.mkExperiment {
+
+          # Install standard tools and iperf3 on all virtual nodes
           nodePackages = with pkgs; [ coreutils iperf3 ];
+
+          # TOPOLOGY: Define the nodes and what they do
           nodes = {
             client = {
               networking.interfaces.eth0.ipv4.addresses = [{ address = "10.0.0.1"; prefixLength = 24; }];
@@ -38,6 +44,7 @@ Add nixnet as a [flake](https://nixos.wiki/wiki/Flakes) input and call `mkExperi
           };
         };
       };
+
     };
 }
 ```
