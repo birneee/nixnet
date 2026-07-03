@@ -7,7 +7,7 @@ Reproducible network experiments with a single command, on a single machine — 
 ## Usage
 1. If not available in your machine, install [Nix](https://nixos.org/download/) first.
 
-2. Add nixnet as a [flake](https://nixos.wiki/wiki/Flakes) input and call `mkExperiment` from `legacyPackages`:
+2. Add nixnet as a [flake](https://nixos.wiki/wiki/Flakes) input and call `mkExperiment` from `legacyPackages` for Experiment:
 
 ```nix
 {
