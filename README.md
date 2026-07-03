@@ -6,7 +6,7 @@ Reproducible network experiments with a single command, on a single machine — 
 
 ## Usage
 
-Add nixnet as a flake input and call `mkExperiment` from `legacyPackages`:
+Add nixnet as a [flake](https://nixos.wiki/wiki/Flakes) input and call `mkExperiment` from `legacyPackages`:
 
 ```nix
 {
