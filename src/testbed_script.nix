@@ -233,10 +233,47 @@ let
               throw "netem autoLimit requires delayMs, rateMbit, and mtu to all be set on interface '${dev}'"
           else
             null;
+        lossArg =
+          if n.loss == null then
+            ""
+          else if n.loss.model == "random" then
+            if n.loss.percent == null then
+              throw "netem loss model 'random' requires percent to be set on interface '${dev}'"
+            else
+              "loss random ${toString n.loss.percent}%"
+          else if n.loss.model == "state" then
+            if n.loss.p13 == null then
+              throw "netem loss model 'state' requires p13 to be set on interface '${dev}'"
+            else
+              "loss state "
+              + lib.concatStringsSep " " (
+                lib.filter (s: s != "") [
+                  (toString n.loss.p13)
+                  (lib.optionalString (n.loss.p31 != null) (toString n.loss.p31))
+                  (lib.optionalString (n.loss.p32 != null) (toString n.loss.p32))
+                  (lib.optionalString (n.loss.p23 != null) (toString n.loss.p23))
+                  (lib.optionalString (n.loss.p14 != null) (toString n.loss.p14))
+                ]
+              )
+          else if n.loss.model == "gemodel" then
+            if n.loss.percent == null then
+              throw "netem loss model 'gemodel' requires percent to be set on interface '${dev}'"
+            else
+              "loss gemodel "
+              + lib.concatStringsSep " " (
+                lib.filter (s: s != "") [
+                  (toString n.loss.percent)
+                  (lib.optionalString (n.loss.r != null) (toString n.loss.r))
+                  (lib.optionalString (n.loss.h != null) (toString n.loss.h))
+                  (lib.optionalString (n.loss.k != null) (toString n.loss.k))
+                ]
+              )
+          else
+            throw "unknown netem loss model '${n.loss.model}' on interface '${dev}'";
         params = lib.concatStringsSep " " (
           lib.filter (s: s != "") [
             (lib.optionalString (n.delayMs != null) "delay ${toString n.delayMs}ms")
-            (lib.optionalString (n.lossPercent != null) "loss ${toString n.lossPercent}%")
+            lossArg
             (lib.optionalString (n.rateMbit != null) "rate ${toString n.rateMbit}Mbit")
             (lib.optionalString (effectiveLimit != null) "limit ${toString effectiveLimit}")
           ]

@@ -32,7 +32,7 @@ Add nixnet as a flake input and call `mkExperiment` from `legacyPackages`:
             };
           };
           veths.eth0 = {
-            netem.lossPercent = 1;
+            netem.loss.percent = 1;
             a.node = "client";
             b.node = "server";
           };
