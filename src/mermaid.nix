@@ -18,6 +18,35 @@ let
               null;
           ipv4s = map (a: "${a.address}/${toString a.prefixLength}") (nsIface.ipv4.addresses or [ ]);
           netemCfg = resolveNetem veth.netem (nsIface.netem or null);
+          # Field order per model, matching the tc-netem(8) parameter order.
+          # `attr` is the option name; `label` is the abbreviation shown in the diagram.
+          lossFields = {
+            state = [
+              { attr = "p13"; label = "p13"; }
+              { attr = "p31"; label = "p31"; }
+              { attr = "p32"; label = "p32"; }
+              { attr = "p23"; label = "p23"; }
+              { attr = "p14"; label = "p14"; }
+            ];
+            gemodel = [
+              { attr = "percent"; label = "p"; }
+              { attr = "r"; label = "r"; }
+              { attr = "h"; label = "h"; }
+              { attr = "k"; label = "k"; }
+            ];
+          };
+          lossLabel =
+            loss:
+            if loss.model == "random" then
+              (lib.optionalString (loss.percent != null) "${builtins.toJSON loss.percent}%loss")
+            else
+              let
+                fields = lib.filter (f: loss.${f.attr} != null) lossFields.${loss.model};
+                paramStr = lib.concatMapStringsSep "," (
+                  f: "${f.label}=${builtins.toJSON loss.${f.attr}}"
+                ) fields;
+              in
+              "loss:${loss.model}(${paramStr})";
         in
         lib.concatStringsSep " " (
           lib.filter (s: s != "") (
@@ -25,7 +54,7 @@ let
             ++ ipv4s
             ++ lib.optionals (netemCfg != null) [
               (lib.optionalString (netemCfg.delayMs != null) "${toString netemCfg.delayMs}ms")
-              (lib.optionalString (netemCfg.lossPercent != null) "${builtins.toJSON netemCfg.lossPercent}%loss")
+              (lib.optionalString (netemCfg.loss != null) (lossLabel netemCfg.loss))
               (lib.optionalString (netemCfg.rateMbit != null) "${toString netemCfg.rateMbit}Mbit/s")
             ]
           )
