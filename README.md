@@ -1,20 +1,20 @@
-<image src="nixnet.svg" alt="nixnet" width="500"/>
+<image src="nixnet.svg" alt="NixNet" width="400"/><br/>
 
-# nixnet
+# NixNet
 
 Reproducible network experiments with a single command, on a single machine — no manual dependency installation, no manual setup, no manual cleanup, repeat anywhere at any time with exactly the same binaries. Define nodes, links, and scripts with the Nix language.
 
 ## Usage
-1. If not available in your machine, install [Nix](https://nixos.org/download/).
+1. Check if your machine meets the requirements: [Installation](#installation)
 
-2. Add nixnet as a [flake](https://wiki.nixos.org/wiki/Flakes) input and call `mkExperiment` from `legacyPackages` for Experiment:
+2. Add NixNet as a [flake](https://wiki.nixos.org/wiki/Flakes) input and call `mkExperiment` from `legacyPackages` for experiment:
 
 ```nix
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
-    nixnet.url = "github:birneee/nixnet";                # <-- Adding nixnet here
+    nixnet.url = "github:birneee/nixnet";                # <-- Adding NixNet here
   };
   outputs = inputs@{ flake-parts, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
@@ -56,6 +56,17 @@ Reproducible network experiments with a single command, on a single machine — 
 nix run
 ```
 
+## Installation
+
+NixNet is a regular Nix flake input, no manual installation required.
+To run NixNet your system requires:
+
+- Linux supporting namespaces
+- Namespace limit must be sufficient for the experiment
+- Nix installation ([link](https://nixos.org/download/) or alternatives)
+- Nix experimental features enabled: `flakes`, `nix-command`
+- AppArmor may need to be disabled
+
 ## Features
 
 - **Portable** — runs on any Linux machine with Nix installed
@@ -86,7 +97,7 @@ nix run
 
 nixnet is designed for lightweight, reproducible experiments that run real application binaries directly in network namespaces — no container overhead, no Python runtime, no daemon. Nix is the only runtime dependency; all other tools including iproute2 are fetched from nixpkgs. The output is a single self-contained shell script pinned to exact package versions via Nix.
 
-Performance evaluation is available [here](https://github.com/birneee/nixnet-evaluation).
+Performance evaluation is available [here](https://github.com/birneee/anrw26-nixnet-evaluation).
 
 ## Examples
 
