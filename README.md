@@ -5,22 +5,29 @@
 Reproducible network experiments with a single command, on a single machine — no manual dependency installation, no manual setup, no manual cleanup, repeat anywhere at any time with exactly the same binaries. Define nodes, links, and scripts with the Nix language.
 
 ## Usage
+1. If not available in your machine, install [Nix](https://nixos.org/download/).
 
-Add nixnet as a flake input and call `mkExperiment` from `legacyPackages`:
+2. Add nixnet as a [flake](https://wiki.nixos.org/wiki/Flakes) input and call `mkExperiment` from `legacyPackages` for Experiment:
 
 ```nix
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
-    nixnet.url = "github:birneee/nixnet";
+    nixnet.url = "github:birneee/nixnet";                # <-- Adding nixnet here
   };
   outputs = inputs@{ flake-parts, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [ "x86_64-linux" "aarch64-linux" ];
       perSystem = { pkgs, inputs', ... }: {
+
+        # EXPERIMENT: Define the virtual network lab
         packages.default = inputs'.nixnet.legacyPackages.mkExperiment {
+
+          # Install standard tools and iperf3 on all virtual nodes
           nodePackages = with pkgs; [ coreutils iperf3 ];
+
+          # TOPOLOGY: Define the nodes and what they do
           nodes = {
             client = {
               networking.interfaces.eth0.ipv4.addresses = [{ address = "10.0.0.1"; prefixLength = 24; }];
@@ -38,11 +45,12 @@ Add nixnet as a flake input and call `mkExperiment` from `legacyPackages`:
           };
         };
       };
+
     };
 }
 ```
 
-Run with:
+3. Run
 
 ```
 nix run
