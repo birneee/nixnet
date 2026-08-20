@@ -58,8 +58,12 @@ let
     in
     lib.concatStringsSep "\n" ([ "graph LR" ] ++ nsDecls ++ ifaceDecls ++ edgeDecls) + "\n";
 
-  mkMermaid =
-    networkConfig: pkgs.writeText "topology.mmd" (buildMermaid pkgs (evalConfig networkConfig).config);
+  # Plain Mermaid diagram source, for embedding directly in a Nix expression
+  # (e.g. wrapping in your own writeText, or splicing into a larger diagram)
+  # without pulling in a derivation.
+  mkMermaidText = networkConfig: buildMermaid pkgs (evalConfig networkConfig).config;
+
+  mkMermaid = networkConfig: pkgs.writeText "topology.mmd" (mkMermaidText networkConfig);
   mkMermaidSvg =
     networkConfig:
     pkgs.runCommand "topology.svg"
@@ -73,5 +77,5 @@ let
       '';
 in
 {
-  inherit mkMermaid mkMermaidSvg;
+  inherit mkMermaidText mkMermaid mkMermaidSvg;
 }

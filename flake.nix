@@ -108,7 +108,7 @@
               mkTestbed = throw "nixnet: mkTestbed has been renamed to mkExperiment";
 
               mermaid = import ./src/mermaid.nix { inherit pkgs evalConfig; };
-              inherit (mermaid) mkMermaid mkMermaidSvg;
+              inherit (mermaid) mkMermaidText mkMermaid mkMermaidSvg;
             };
         };
     });
