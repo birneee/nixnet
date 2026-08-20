@@ -26,6 +26,11 @@ _unshare_jail() {
   if [ "$(id -u)" -eq 0 ]; then
     user_args=()
   fi
+
+  # --net creates an isolated network stack. 
+  # When jail_setup mounts /proc,
+  # /proc/sys/net will expose fresh kernel defaults.
+  # todo use NixNet (sysctl -p sysctl.conf --ignore)
   local net_arg="--net"
   local uts_arg="--uts"
   local ipc_arg="--ipc"
