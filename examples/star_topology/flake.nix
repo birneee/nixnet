@@ -48,7 +48,8 @@
           };
           nodeList = map mkNode (lib.range 1 n);
           config = {
-            arp = true;
+            arp = false;
+            arpPrefill = true;
             workDir = null;
             bridges = [ "br0" ];
             nodes = lib.mergeAttrsList (map (node: node.nodes) nodeList);

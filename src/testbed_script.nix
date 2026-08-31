@@ -362,36 +362,65 @@ let
     ]
   ) veths;
 
-  # Prefill ARP tables for veth pairs
-  linkArpPrefillCommands = map (
-    veth:
+  sameEndpoint = x: y: x.node == y.node && x.iface == y.iface;
+  isBridge = endpoint: builtins.elem endpoint.node config.bridges;
+
+  # The far endpoints of all veths attached to a bridge.
+  bridgePorts =
+    brName:
+    lib.concatMap (
+      veth:
+      lib.optional (veth.a.node == brName) veth.b ++ lib.optional (veth.b.node == brName) veth.a
+    ) veths;
+
+  # The addressable endpoints in the broadcast domain spanned by brName,
+  # i.e. the ports of brName and of every bridge reachable from it.
+  broadcastDomain =
+    brName:
+    lib.filter (port: !isBridge port) (
+      lib.concatMap (b: bridgePorts b.key) (builtins.genericClosure {
+        startSet = [ { key = brName; } ];
+        operator = b: map (port: { key = port.node; }) (lib.filter isBridge (bridgePorts b.key));
+      })
+    );
+
+  # The other members of an endpoint's layer 2 broadcast domain. Across a plain
+  # veth pair that is just the other end, but a bridge device carries no address
+  # itself, so there it is the other members of the bridge's domain.
+  l2Peers =
+    endpoint:
     let
-      arpPrefillA = resolveFirst "arpPrefill" [
-        (getNodeIface veth.a)
-        veth
+      veth = getVeth endpoint.node endpoint.iface;
+      other = if sameEndpoint veth.a endpoint then veth.b else veth.a;
+    in
+    if isBridge other then
+      lib.filter (m: !sameEndpoint m endpoint) (broadcastDomain other.node)
+    else
+      [ other ];
+
+  # Prefill the ARP table of every veth endpoint with its broadcast domain.
+  linkArpPrefillCommands = mkVethEndpointCmds (
+    endpoint:
+    let
+      arpPrefill = resolveFirst "arpPrefill" [
+        (getNodeIface endpoint)
+        (getVeth endpoint.node endpoint.iface)
         config
       ];
-      arpPrefillB = resolveFirst "arpPrefill" [
-        (getNodeIface veth.b)
-        veth
-        config
-      ];
-      getIpv4s = node: (getNodeIface node).ipv4.addresses or [ ];
-      # Get MAC from peer once, then add a neigh entry for each of its IPv4 addresses.
       mkPrefill =
-        localNs: localIface: peerNs: peerIface: peerAddrs:
-        lib.optionalString (peerAddrs != [ ]) (
-          "_MAC=$(ip netns exec ${peerNs} cat /sys/class/net/${peerIface}/address)\n"
-          + lib.concatStringsSep "\n" (
-            map (a: "ip -n ${localNs} neigh add ${a.address} lladdr \"$_MAC\" dev ${localIface}") peerAddrs
-          )
+        peer:
+        let
+          addrs = (getNodeIface peer).ipv4.addresses or [ ];
+        in
+        lib.optionalString (addrs != [ ]) (
+          "_MAC=$(ip netns exec ${peer.node} cat /sys/class/net/${peer.iface}/address)\n"
+          + lib.concatMapStringsSep "\n" (
+            a: "ip -n ${endpoint.node} neigh add ${a.address} lladdr \"$_MAC\" dev ${endpoint.iface}"
+          ) addrs
         );
     in
-    concatNonEmpty [
-      (lib.optionalString arpPrefillA (mkPrefill veth.a.node veth.a.iface veth.b.node veth.b.iface (getIpv4s veth.b)))
-      (lib.optionalString arpPrefillB (mkPrefill veth.b.node veth.b.iface veth.a.node veth.a.iface (getIpv4s veth.a)))
-    ]
-  ) veths;
+    lib.optional arpPrefill (concatNonEmpty (map mkPrefill (l2Peers endpoint)))
+  );
 
   # Build per-node route commands for one IP version.
   # ipCmd: "ip" or "ip -6"; getGw: nodeCfg -> gw|null; getRoutes: ifaceCfg -> list
