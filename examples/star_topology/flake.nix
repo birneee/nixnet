@@ -50,6 +50,7 @@
           config = {
             arp = false;
             arpPrefill = true;
+            deterministicMacAddress = true;
             workDir = null;
             bridges = [ "br0" ];
             nodes = lib.mergeAttrsList (map (node: node.nodes) nodeList);

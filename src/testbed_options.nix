@@ -20,7 +20,7 @@ let
 
   nixosSysctlOption = nixosOpts.boot.kernel.sysctl;
   netem = import ./netem_options.nix { inherit pkgs; };
-  inherit (import ./common.nix { inherit pkgs; }) busyboxMini;
+  inherit (import ./common.nix { inherit pkgs; }) attrsOrLegacyList busyboxMini resolveFirst;
 
   iface = lib.types.submodule {
     options = {
@@ -59,10 +59,10 @@ in
       apply =
         val:
         if builtins.isList val then
-          throw "nixnet: `veths` has changed from a list to an attribute set. Use `veths.eth0 = { a.node = \"client\"; b.node = \"server\"; }` instead of `veths = [{ a.ns = ...; }]`."
+          throw "nixnet: `veths` is now an attrset — use `veths.<name> = { a.node = ...; b.node = ...; }`"
         else
           val;
-      type = lib.types.either (lib.types.listOf lib.types.anything) (
+      type = attrsOrLegacyList (
         lib.types.attrsOf (
           lib.types.submodule (
             { name, ... }: {
@@ -81,6 +81,11 @@ in
                   type = lib.types.nullOr lib.types.bool;
                   default = null;
                   description = "Prefill ARP table for both endpoints of this veth pair. Overrides top-level arpPrefill.";
+                };
+                deterministicMacAddress = lib.mkOption {
+                  type = lib.types.nullOr lib.types.bool;
+                  default = null;
+                  description = "Compute both endpoints' MAC addresses deterministically during nix evaluation instead of leaving it to the kernel at runtime. Overrides top-level deterministicMacAddress. Ignored for an endpoint whose interface sets macAddress explicitly.";
                 };
                 mtu =
                   let
@@ -127,6 +132,11 @@ in
       type = lib.types.bool;
       default = false;
       description = "Global default arpPrefill setting for all interfaces.";
+    };
+    deterministicMacAddress = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Global default deterministicMacAddress setting for all interfaces. When enabled, MAC addresses are computed during nix evaluation (from node and interface name) instead of being assigned randomly by the kernel at runtime, so arpPrefill can embed them directly instead of reading them back at runtime.";
     };
     mtu =
       let
@@ -208,10 +218,10 @@ in
       apply =
         val:
         if builtins.isList val then
-          throw "nixnet: `scripts` has changed from a list to an attribute set. Use `scripts.name = { exec = ...; }` instead of `scripts = [{ exec = ...; }]`."
+          throw "nixnet: `scripts` is now an attrset — use `scripts.<name> = { exec = ...; }`"
         else
           val;
-      type = lib.types.either (lib.types.listOf lib.types.anything) (
+      type = attrsOrLegacyList (
         lib.types.attrsOf (
           lib.types.submodule {
             options = {
@@ -248,16 +258,96 @@ in
     };
   };
 
-  config.assertions = lib.concatLists (
-    lib.mapAttrsToList (vethName: veth: [
-      {
-        assertion = veth.a.ns == null;
-        message = "nixnet: `veths.${vethName}.a.ns` has been renamed to `node`";
-      }
-      {
-        assertion = veth.b.ns == null;
-        message = "nixnet: `veths.${vethName}.b.ns` has been renamed to `node`";
-      }
-    ]) config.veths
-  );
+  config =
+    let
+      vethList = lib.attrValues config.veths;
+      getVeth =
+        nodeName: ifaceName:
+        lib.findFirst (
+          v:
+          (v.a.node == nodeName && v.a.iface == ifaceName) || (v.b.node == nodeName && v.b.iface == ifaceName)
+        ) null vethList;
+      allVethEndpoints = lib.concatMap (v: [ v.a v.b ]) vethList;
+      macKey = endpoint: "${endpoint.node}:${endpoint.iface}";
+
+      # deterministic macAddress, mkDefault below (interface > veth > global)
+      mkSequentialMacAddress =
+        index:
+        let
+          octet = n: lib.toLower (lib.fixedWidthString 2 "0" (lib.toHexString (lib.mod n 256)));
+          rest = index / 256;
+        in
+        "02:00:00:" + lib.concatStringsSep ":" (map octet [ (rest / 256) rest index ]);
+      wantsDeterministicMac =
+        endpoint:
+        resolveFirst "deterministicMacAddress" [
+          config.nodes.${endpoint.node}.networking.interfaces.${endpoint.iface}
+          (getVeth endpoint.node endpoint.iface)
+          config
+        ];
+      deterministicEndpoints = lib.filter wantsDeterministicMac allVethEndpoints;
+      deterministicMacAddresses = lib.listToAttrs (
+        lib.imap0 (i: endpoint: {
+          name = macKey endpoint;
+          value = mkSequentialMacAddress i;
+        }) deterministicEndpoints
+      );
+
+    in
+    {
+      nodes = lib.foldl' lib.recursiveUpdate { } (
+        map (
+          endpoint:
+          let
+            veth = getVeth endpoint.node endpoint.iface;
+          in
+          lib.setAttrByPath [ endpoint.node "networking" "interfaces" endpoint.iface ] {
+            mtu = lib.mkDefault (resolveFirst "mtu" [ veth config ]);
+            arp = lib.mkDefault (resolveFirst "arp" [ veth config ]);
+            arpPrefill = lib.mkDefault (resolveFirst "arpPrefill" [ veth config ]);
+            macAddress = lib.mkDefault (deterministicMacAddresses.${macKey endpoint} or null);
+          }
+        ) allVethEndpoints
+      );
+      assertions =
+        let
+          # deterministic collisions only, matching explicit macs are the user's choice.
+          # unique indices, so a match is always against an explicit mac
+          collidesElsewhere =
+            endpoint: candidate:
+            lib.any (
+              other:
+              !(other.node == endpoint.node && other.iface == endpoint.iface)
+              && config.nodes.${other.node}.networking.interfaces.${other.iface}.macAddress == candidate
+            ) allVethEndpoints;
+          deterministicCollisions = lib.filter (m: m != null) (
+            map (
+              endpoint:
+              let
+                candidate = deterministicMacAddresses.${macKey endpoint} or null;
+              in
+              if candidate != null && collidesElsewhere endpoint candidate then candidate else null
+            ) deterministicEndpoints
+          );
+          renamedNsAssertions = lib.concatLists (
+            lib.mapAttrsToList (vethName: veth: [
+              {
+                assertion = veth.a.ns == null;
+                message = "nixnet: `veths.${vethName}.a.ns` renamed to `node`";
+              }
+              {
+                assertion = veth.b.ns == null;
+                message = "nixnet: `veths.${vethName}.b.ns` renamed to `node`";
+              }
+            ]) config.veths
+          );
+        in
+        [
+          {
+            assertion = deterministicCollisions == [ ];
+            message = "nixnet: deterministicMacAddress collision: ${lib.concatStringsSep ", " deterministicCollisions} — set macAddress explicitly to resolve";
+          }
+        ]
+        ++ renamedNsAssertions;
+    };
 }

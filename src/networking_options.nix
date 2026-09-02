@@ -146,6 +146,21 @@ lib.types.submodule {
                     nixosMtu.description
                     + " Same type as NixOS networking.interfaces.<name>.mtu. Overrides veth-level and top-level mtu.";
                 };
+              macAddress =
+                let
+                  nixosMacAddress = (nixosInterfaces.type.getSubOptions [ ]).macAddress;
+                in
+                lib.mkOption {
+                  inherit (nixosMacAddress) type default example;
+                  description =
+                    nixosMacAddress.description
+                    + " Same type as NixOS networking.interfaces.<name>.macAddress. Known at nix-eval time, so arpPrefill uses it directly instead of reading it back at runtime. Takes precedence over deterministicMacAddress.";
+                };
+              deterministicMacAddress = lib.mkOption {
+                type = lib.types.nullOr lib.types.bool;
+                default = null;
+                description = "Compute this interface's MAC address deterministically during nix evaluation instead of leaving it to the kernel at runtime. Overrides veth-level and top-level deterministicMacAddress. Ignored if macAddress is set explicitly.";
+              };
               netem = lib.mkOption {
                 type = lib.types.nullOr (import ./netem_options.nix { inherit pkgs; });
                 default = null;

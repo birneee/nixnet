@@ -75,6 +75,7 @@ To run NixNet your system requires:
 - **netem** — delay, loss, rate limiting per link or endpoint
 - **Routing** — static routes, default routes, IP forwarding
 - **ARP control** — disable ARP or prefill tables with peer MACs
+- **MAC control** — set addresses manually or derive them deterministically at eval time
 - **Repeatable** — repeat with `sudo nix run . 1-5`; `{run}` in `workDir` becomes a run index
 - **Foreground scripts** — full terminal access for interactive tools
 - **Sandboxing** — experiments are isolated with Linux namespaces to prevent side effects
@@ -120,7 +121,7 @@ xdg-open $(nix build 'github:birneee/nixnet?dir=examples/ping#mermaid-svg' --no-
 
 The experiment testbed runs in two phases:
 
-1. **Setup** — creates a testbed namespace, within creates node namespaces, applies sysctl settings, creates veth pairs, assigns addresses, brings interfaces up, configures MTU, ARP, netem, and routes. Hook: `preSetup` / `postSetup`.
+1. **Setup** — creates a testbed namespace, within creates node namespaces, applies sysctl settings, creates veth pairs, sets MAC addresses, assigns IP addresses, brings interfaces up, configures MTU, ARP, netem, and routes. Hook: `preSetup` / `postSetup`.
 2. **Run** — launches all background scripts in parallel, then foreground scripts sequentially. Waits for scripts with `await = true` before exiting. Hook: `preRun` / `postRun`.
 
 Cleanup (SIGINT to all child processes, namespace deletion) runs automatically on exit regardless of which phase it occurs in.
@@ -172,6 +173,7 @@ For option documentation and completions with [nixd](https://github.com/nix-comm
 ## Contributing
 
 Contributions are welcome! Feel free to open issues or pull requests.
+See [CONTRIBUTION.md](CONTRIBUTION.md) for guidelines.
 
 ## License
 

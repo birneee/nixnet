@@ -16,27 +16,14 @@ let
   workDir = config.workDir;
   workDirEnsureEmpty = config.workDirEnsureEmpty;
 
-  # Find the veth that connects to a given node interface, or null if absent.
-  getVeth =
-    nodeName: ifaceName:
-    lib.findFirst (
-      v:
-      (v.a.node == nodeName && v.a.iface == ifaceName) || (v.b.node == nodeName && v.b.iface == ifaceName)
-    ) null veths;
-
-  # Look up the interface config for a veth endpoint from its node, or null if absent.
-  getNodeIface =
-    endpoint:
-    if nodes ? ${endpoint.node} && nodes.${endpoint.node}.networking.interfaces ? ${endpoint.iface} then
-      nodes.${endpoint.node}.networking.interfaces.${endpoint.iface}
-    else
-      null;
+  # interface config of a veth endpoint, always present.
+  # mtu, arp, arpPrefill and macAddress are already resolved by testbed_options.nix
+  getNodeIface = endpoint: nodes.${endpoint.node}.networking.interfaces.${endpoint.iface};
 
   inherit (import ./common.nix { inherit pkgs; })
     busyboxMini
     concatNonEmpty
     mkPathLines
-    resolveFirst
     resolveNetem
     ;
 
@@ -121,6 +108,9 @@ let
 
   # Create nodes (including bridge nodes)
   nodeCreateCommands =
+    let
+      nonBridgeNames = lib.filter (name: !builtins.elem name config.bridges) (lib.attrNames nodes);
+    in
     map (
       name:
       let
@@ -158,7 +148,7 @@ let
           }${wayland}${pipewire}${binds} \\\n  ${name}"
         ]
       )
-    ) (lib.attrNames nodes)
+    ) nonBridgeNames
     ++ map (name: "jail add ${name}") config.bridges;
 
   # Bring loopback interfaces up
@@ -266,6 +256,20 @@ let
     { nodeName, ifaceName }: { ns = nodeName; bare = "link add ${ifaceName} type dummy"; }
   ) dummyIfaces;
 
+  # must run before interfaces are up
+  setMacCommands = lib.concatLists (
+    lib.mapAttrsToList (
+      nodeName: nodeCfg:
+      lib.concatMap (
+        ifaceName:
+        let
+          mac = nodeCfg.networking.interfaces.${ifaceName}.macAddress;
+        in
+        lib.optional (mac != null) { ns = nodeName; bare = "link set ${ifaceName} address ${mac}"; }
+      ) (lib.attrNames nodeCfg.networking.interfaces)
+    ) nodes
+  );
+
   # Collect {ns, iface, addr} for all addresses of a given IP version.
   collectAddrs =
     getAddrs:
@@ -314,7 +318,7 @@ let
     e: lib.optional (builtins.elem e.node config.bridges) { ns = e.node; bare = "link set ${e.iface} master ${e.node}"; }
   );
 
-  # Configure MTU for all interfaces from networking.interfaces
+  # config.mtu fallback only for dummy interfaces
   linkMtuCommands = lib.concatLists (
     lib.mapAttrsToList (
       nodeName: nodeCfg:
@@ -322,23 +326,21 @@ let
         ifaceName:
         let
           ifaceCfg = nodeCfg.networking.interfaces.${ifaceName};
-          veth = getVeth nodeName ifaceName;
-          mtu = resolveFirst "mtu" [ ifaceCfg veth config ];
+          mtu = if ifaceCfg.mtu != null then ifaceCfg.mtu else config.mtu;
         in
         lib.optional (mtu != null) { ns = nodeName; bare = "link set ${ifaceName} mtu ${toString mtu}"; }
       ) (lib.attrNames nodeCfg.networking.interfaces)
     ) nodes
   );
 
-  # Configure ARP for veth endpoints
+  # only meaningful for veth endpoints
   linkArpCommands = lib.concatMap (
     veth:
-    let
-      arpA = resolveFirst "arp" [ (getNodeIface veth.a) veth config ];
-      arpB = resolveFirst "arp" [ (getNodeIface veth.b) veth config ];
-    in
-    lib.optional (!arpA) { ns = veth.a.node; bare = "link set ${veth.a.iface} arp off"; }
-    ++ lib.optional (!arpB) { ns = veth.b.node; bare = "link set ${veth.b.iface} arp off"; }
+    lib.optional (!(getNodeIface veth.a).arp) { ns = veth.a.node; bare = "link set ${veth.a.iface} arp off"; }
+    ++ lib.optional (!(getNodeIface veth.b).arp) {
+      ns = veth.b.node;
+      bare = "link set ${veth.b.iface} arp off";
+    }
   ) veths;
 
   # Configure netem for veth pairs
@@ -349,20 +351,11 @@ let
       ifaceB = getNodeIface veth.b;
     in
     concatNonEmpty [
-      (mkNetemCmd veth.a.node (resolveNetem veth.netem (ifaceA.netem or null)) (resolveFirst "mtu" [
-        ifaceA
-        veth
-        config
-      ]) veth.a.iface)
-      (mkNetemCmd veth.b.node (resolveNetem veth.netem (ifaceB.netem or null)) (resolveFirst "mtu" [
-        ifaceB
-        veth
-        config
-      ]) veth.b.iface)
+      (mkNetemCmd veth.a.node (resolveNetem veth.netem ifaceA.netem) ifaceA.mtu veth.a.iface)
+      (mkNetemCmd veth.b.node (resolveNetem veth.netem ifaceB.netem) ifaceB.mtu veth.b.iface)
     ]
   ) veths;
 
-  sameEndpoint = x: y: x.node == y.node && x.iface == y.iface;
   isBridge = endpoint: builtins.elem endpoint.node config.bridges;
 
   # The far endpoints of all veths attached to a bridge.
@@ -384,43 +377,73 @@ let
       })
     );
 
-  # The other members of an endpoint's layer 2 broadcast domain. Across a plain
-  # veth pair that is just the other end, but a bridge device carries no address
-  # itself, so there it is the other members of the bridge's domain.
-  l2Peers =
-    endpoint:
+  # Every L2 broadcast domain as a list of member endpoints.
+  # A domain is all interfaces wired together by veths and bridges.
+  allDomains =
     let
-      veth = getVeth endpoint.node endpoint.iface;
-      other = if sameEndpoint veth.a endpoint then veth.b else veth.a;
+      domainKey = members: lib.concatStringsSep "," (
+        lib.sort (a: b: a < b) (map (m: "${m.node}:${m.iface}") members)
+      );
+      bridgeDomains = lib.attrValues (
+        lib.listToAttrs (
+          map (members: {
+            name = domainKey members;
+            value = members;
+          }) (map broadcastDomain config.bridges)
+        )
+      );
     in
-    if isBridge other then
-      lib.filter (m: !sameEndpoint m endpoint) (broadcastDomain other.node)
-    else
-      [ other ];
+    bridgeDomains
+    ++ map (v: [
+      v.a
+      v.b
+    ]) (lib.filter (v: !isBridge v.a && !isBridge v.b) veths);
 
-  # Prefill the ARP table of every veth endpoint with its broadcast domain.
-  linkArpPrefillCommands = mkVethEndpointCmds (
-    endpoint:
+  # ARP prefill: one shared `neigh add` batch per domain, `%DEV%` swapped in per target via bash
+  arpPrefillCommands =
     let
-      arpPrefill = resolveFirst "arpPrefill" [
-        (getNodeIface endpoint)
-        (getVeth endpoint.node endpoint.iface)
-        config
-      ];
-      mkPrefill =
-        peer:
+      safeIdent = s: lib.replaceStrings [ "-" ] [ "_" ] s;
+      macVar = peer: "_MAC_${safeIdent peer.node}_${safeIdent peer.iface}";
+      # statically known macs are embedded, the rest are read back at runtime
+      hasStaticMac = peer: (getNodeIface peer).macAddress != null;
+      macExpr = peer: if hasStaticMac peer then (getNodeIface peer).macAddress else "$" + macVar peer;
+      # only meaningful for veth endpoints
+      wantsPrefill = endpoint: (getNodeIface endpoint).arpPrefill;
+
+      mkDomainCommands =
+        index: members:
         let
-          addrs = (getNodeIface peer).ipv4.addresses or [ ];
+          addressed = lib.filter (m: (getNodeIface m).ipv4.addresses != [ ]) members;
+          targets = lib.filter wantsPrefill addressed;
+          runtimeLookupPeers = lib.filter (peer: !hasStaticMac peer) addressed;
+          domainVar = "_ARP_DOMAIN_${toString index}";
+          tableLines = lib.concatMap (
+            peer:
+            map (
+              a: "neigh add ${a.address} lladdr ${macExpr peer} dev %DEV%"
+            ) (getNodeIface peer).ipv4.addresses
+          ) addressed;
         in
-        lib.optionalString (addrs != [ ]) (
-          "_MAC=$(ip netns exec ${peer.node} cat /sys/class/net/${peer.iface}/address)\n"
-          + lib.concatMapStringsSep "\n" (
-            a: "ip -n ${endpoint.node} neigh add ${a.address} lladdr \"$_MAC\" dev ${endpoint.iface}"
-          ) addrs
+        lib.optionals (targets != [ ] && addressed != [ ]) (
+          map (
+            peer: "${macVar peer}=$(ip netns exec ${peer.node} cat /sys/class/net/${peer.iface}/address)"
+          ) runtimeLookupPeers
+          # tab-indented, `ip -batch` tolerates leading whitespace.
+          # leading "\<newline>" is a continuation, not part of the value
+          ++ [
+            (
+              "${domainVar}=\"\\\n"
+              + lib.concatStringsSep "\n" (map (l: "\t" + l) tableLines)
+              + "\n\""
+            )
+          ]
+          ++ map (
+            target:
+            ''ip -n ${target.node} -b - <<<"''${${domainVar}//%DEV%/${target.iface}}"''
+          ) targets
         );
     in
-    lib.optional arpPrefill (concatNonEmpty (map mkPrefill (l2Peers endpoint)))
-  );
+    lib.concatLists (lib.imap0 mkDomainCommands allDomains);
 
   # Build per-node route commands for one IP version.
   # ipCmd: "ip" or "ip -6"; getGw: nodeCfg -> gw|null; getRoutes: ifaceCfg -> list
@@ -479,6 +502,7 @@ let
       (mkBashSection "create bridges" (mkGroupedIpBatch bridgeAddCommands))
       (mkBashSection "create veth pairs" vethCreateCommands)
       (mkBashSection "create dummy interfaces" (mkGroupedIpBatch dummyCreateCommands))
+      (mkBashSection "configure mac addresses" (mkGroupedIpBatch setMacCommands))
       (mkBashSection "assign ipv4 addresses" ipv4AddrCommands)
       (mkBashSection "assign ipv6 addresses" ipv6AddrCommands)
       (mkBashSection "attach interfaces to bridges" (mkGroupedIpBatch linkBridgeCommands))
@@ -487,7 +511,7 @@ let
       (mkBashSection "configure mtu" (mkGroupedIpBatch linkMtuCommands))
       (mkBashSection "configure arp" (mkGroupedIpBatch linkArpCommands))
       (mkBashSection "configure netem" linkNetemCommands)
-      (mkBashSection "prefill arp" linkArpPrefillCommands)
+      (mkBashSection "prefill arp" arpPrefillCommands)
       (mkBashSection "configure ipv4 routing" ipv4RouteCommands)
       (mkBashSection "configure ipv6 routing" ipv6RouteCommands)
       (mkBashSection "node post-setup hooks" nodePostSetupCommands)

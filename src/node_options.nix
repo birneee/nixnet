@@ -5,6 +5,7 @@
 }:
 let
   lib = pkgs.lib;
+  inherit (import ./common.nix { inherit pkgs; }) attrsOrLegacyList;
 in
 lib.types.submodule {
   options = {
@@ -18,10 +19,10 @@ lib.types.submodule {
       apply =
         val:
         if builtins.isList val then
-          throw "nixnet: `scripts` has changed from a list to an attribute set. Use `scripts.name = { exec = ...; }` instead of `scripts = [{ exec = ...; }]`."
+          throw "nixnet: `scripts` is now an attrset — use `scripts.<name> = { exec = ...; }`"
         else
           val;
-      type = lib.types.either (lib.types.listOf lib.types.anything) (
+      type = attrsOrLegacyList (
         lib.types.attrsOf (
           lib.types.submodule {
             options = {

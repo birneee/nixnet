@@ -23,6 +23,16 @@ in
     }) [ "sed" "sysctl" "grep" "awk" "find" "xargs" ]
   );
 
+  # Attrs type that still type-checks the legacy list form, so `apply` can throw a
+  # migration error instead of a type error. `either` hides sub-options from the
+  # option docs, so restore them from the attrs type.
+  attrsOrLegacyList =
+    attrsType:
+    lib.types.either (lib.types.listOf lib.types.anything) attrsType
+    // {
+      inherit (attrsType) getSubOptions;
+    };
+
   # Pick the first non-null value for `field` from a priority-ordered list of attrsets (nulls skipped).
   resolveFirst =
     field: sources:
