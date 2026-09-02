@@ -64,6 +64,13 @@ let
   mkMermaidText = networkConfig: buildMermaid pkgs (evalConfig networkConfig).config;
 
   mkMermaid = networkConfig: pkgs.writeText "topology.mmd" (mkMermaidText networkConfig);
+  # Double mermaid's own defaults (maxTextSize 50000, maxEdges 500)
+  mermaidConfigFile = pkgs.writeText "mermaid-config.json" (
+    builtins.toJSON {
+      maxTextSize = 100000;
+      maxEdges = 1000;
+    }
+  );
   mkMermaidSvg =
     networkConfig:
     pkgs.runCommand "topology.svg"
@@ -73,7 +80,7 @@ let
         HOME = "/tmp";
       }
       ''
-        mmdc -i ${mkMermaid networkConfig} -o $out
+        mmdc -c ${mermaidConfigFile} -i ${mkMermaid networkConfig} -o $out
       '';
 in
 {
