@@ -4,16 +4,13 @@ let
 
   jail_pkg = pkgs.callPackage ../jail/pkgs/jail.nix { };
 
+  inherit (import ./lib.nix { inherit pkgs; }) evalConfig;
+
   mkExperiment =
     networkConfig:
     import ../src/testbed_jail.nix {
       inherit pkgs jail_pkg;
-      config = (lib.evalModules {
-        modules = [
-          (import ../src/testbed_options.nix { inherit pkgs; nixpkgs = pkgs.path; })
-          networkConfig
-        ];
-      }).config;
+      config = (evalConfig networkConfig).config;
     };
 
   # Builds a test script that runs the testbed and asserts its exit code.
@@ -27,7 +24,7 @@ let
       runtimeInputs = [ pkgs.coreutils ];
       text = ''
         _rc=0
-        ${testbed}/bin/testbed || _rc=$?
+        ${lib.getExe testbed} || _rc=$?
         [ "$_rc" -eq ${toString expected} ] || {
           echo "expected exit ${toString expected}, got $_rc"
           exit 1

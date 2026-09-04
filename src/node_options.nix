@@ -83,5 +83,29 @@ lib.types.submodule {
       default = false;
       description = "Bind the PipeWire and PulseAudio-compat sockets into the sandbox, enabling audio output.";
     };
+    layer2Transparent = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Do not terminate a broadcast domain at this node: the veths on all of
+        its interfaces are treated as one domain that continues through it,
+        exactly as `bridges` does. Effects:
+
+        - arpPrefill resolves the true remote endpoints reachable through this
+          node, and embeds their real MAC addresses, instead of stopping at
+          this node's own interface MACs
+        - this node's own interfaces are not addressable members of that
+          domain and get no arpPrefill entries
+        - unlike `bridges`, no kernel bridge device is created and no
+          interface is attached via `master`; nixnet sets up no forwarding at
+          all
+
+        Set it on a node that passes Ethernet frames between all of its
+        interfaces itself, outside the kernel — e.g. a userspace raw-socket
+        relay like PhantomLink. It only describes what the node already does,
+        so do not set it on a node that forwards between just some of its
+        interfaces, or that rewrites MAC addresses in transit.
+      '';
+    };
   };
 }

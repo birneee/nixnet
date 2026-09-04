@@ -78,13 +78,26 @@ pkgs.stdenv.mkDerivation {
       ];
     in
     ''
-      install -m 0755 ${pkgs.writeScript name ''
+      # Stages, each exec-ing the next; only 0-clear is a stable entry point
+      # (meta.mainProgram), the rest expect the previous stage's state:
+      #   0-clear -> 1-cli -> 2-launch-testbed-jail -> 3-run-testbed
+      install -m 0755 ${pkgs.writeScript "0-clear" ''
         #!${pkgs.bashNonInteractive}/bin/bash
+        # Stage 0: clear PATH to nixnet's own pinned packages, before anything else.
         set -euo pipefail
 
         _PATH="" # clear path
-        ${common.mkPathLines (config.testbedPackages ++ [ jail_pkg ])}
+        ${common.mkPathLines (lib.unique (config.testbedPackages ++ [ jail_pkg ]))}
         export PATH="$_PATH"
+
+        exec "$(dirname "$(readlink -f "$0")")/1-cli" "$@"
+      ''} $out/bin/0-clear
+
+      install -m 0755 ${pkgs.writeScript "1-cli" ''
+        #!${pkgs.bashNonInteractive}/bin/bash
+        # Stage 1: parses the run-number/range argument and resolves + creates
+        # the work directory.
+        set -euo pipefail
 
         ${common.concatNonEmpty [
           (
@@ -112,15 +125,25 @@ pkgs.stdenv.mkDerivation {
           )
           (lib.optionalString (workDir != null) ''
             mkdir -p "$_WORK_DIR"
-            echo "testbed| workdir: $(realpath "$_WORK_DIR")"'')
+            echo "testbed| workdir: $(realpath "$_WORK_DIR")"
+            export _WORK_DIR'')
         ]}
+
+        exec "$(dirname "$(readlink -f "$0")")/2-launch-testbed-jail"
+      ''} $out/bin/1-cli
+
+      install -m 0755 ${pkgs.writeScript "2-launch-testbed-jail" ''
+        #!${pkgs.bashNonInteractive}/bin/bash
+        # Stage 2: launch the jail sandbox around stage 3, in $_WORK_DIR from stage 1.
+        set -euo pipefail
 
         _SELF="$(readlink -f "$0")"
         exec jail exec \
-          ${lib.concatStringsSep " \\\n  " (jailFlags ++ [ "\"$(dirname \"$_SELF\")/.${name}-wrapped\"" ])}
-      ''} $out/bin/${name}
-      install -m 0755 ${pkgs.writeScript "${name}-wrapped" gen.scriptText} $out/bin/.${name}-wrapped
+          ${lib.concatStringsSep " \\\n  " (jailFlags ++ [ "\"$(dirname \"$_SELF\")/3-run-testbed\"" ])}
+      ''} $out/bin/2-launch-testbed-jail
+
+      install -m 0755 ${pkgs.writeScript "3-run-testbed" gen.scriptText} $out/bin/3-run-testbed
     ''
   );
-  meta.mainProgram = name;
+  meta.mainProgram = "0-clear";
 }

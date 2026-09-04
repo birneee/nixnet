@@ -35,6 +35,7 @@ jobs:
           - name: tmux
             skip_run: true # requires interactive terminal
           - name: nft
+          - name: phantomlink
           - name: tcpreplay
           - name: quic-go
     steps:

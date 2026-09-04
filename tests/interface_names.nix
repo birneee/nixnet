@@ -2,21 +2,7 @@
 let
   lib = pkgs.lib;
 
-  evalConfig =
-    networkConfig:
-    let
-      result = lib.evalModules {
-        modules = [
-          (import ../src/testbed_options.nix {
-            inherit pkgs;
-            nixpkgs = pkgs.path;
-          })
-          networkConfig
-        ];
-      };
-      failed = lib.filter (a: !a.assertion) result.config.assertions;
-    in
-    if failed != [ ] then throw (lib.concatMapStringsSep "\n" (a: a.message) failed) else result;
+  inherit (import ./lib.nix { inherit pkgs; }) evalConfig;
 
   config =
     (evalConfig {

@@ -26,6 +26,8 @@ let
     mkPathLines
     resolveNetem
     ;
+  linkModule = import ./link_options.nix { inherit pkgs; };
+  ethtoolModule = import ./ethtool_options.nix { inherit pkgs; };
 
   # Emit a commented bash section only when lines is non-empty.
   mkBashSection =
@@ -48,6 +50,17 @@ let
     lib.mapAttrsToList (
       ns: entries:
       mkIpBatch "ip" ns (lib.concatMapStringsSep "\n" (e: e.bare) entries)
+    ) (lib.groupBy (c: c.ns) cmds);
+
+  # Like mkGroupedIpBatch, but via "ip netns exec ns bash -c '...'" for binaries
+  # without a batch mode. `set -e` so a failure isn't masked by a later command.
+  mkGroupedNsExec =
+    cmds:
+    lib.mapAttrsToList (
+      ns: entries:
+      "ip netns exec ${ns} bash -c ${
+        lib.escapeShellArg ("set -e\n" + lib.concatMapStringsSep "\n" (e: e.bare) entries)
+      }"
     ) (lib.groupBy (c: c.ns) cmds);
 
   # Produce a flat list of {ns, bare} by applying f to both endpoints of every veth.
@@ -333,6 +346,22 @@ let
     ) nodes
   );
 
+  # Per-interface commands from link_options.nix/ethtool_options.nix, with the
+  # top-level config.${field} as fallback, like linkMtuCommands above.
+  mkIfaceCommands =
+    module: field:
+    lib.concatLists (
+      lib.mapAttrsToList (
+        nodeName: nodeCfg:
+        lib.concatMap (
+          ifaceName:
+          map (bare: { ns = nodeName; inherit bare; }) (
+            module.mkCommands nodeCfg.networking.interfaces.${ifaceName}.${field} config.${field} ifaceName
+          )
+        ) (lib.attrNames nodeCfg.networking.interfaces)
+      ) nodes
+    );
+
   # only meaningful for veth endpoints
   linkArpCommands = lib.concatMap (
     veth:
@@ -357,8 +386,11 @@ let
   ) veths;
 
   isBridge = endpoint: builtins.elem endpoint.node config.bridges;
+  # Bridges and layer2Transparent nodes are both transparent for broadcast-domain purposes; only bridges get a real `master` attachment.
+  isLayer2Transparent = endpoint: isBridge endpoint || nodes.${endpoint.node}.layer2Transparent;
+  layer2TransparentNodes = lib.filter (node: isLayer2Transparent { inherit node; }) (lib.attrNames nodes);
 
-  # The far endpoints of all veths attached to a bridge.
+  # The far endpoints of all veths attached to a bridge (or layer2Transparent node).
   bridgePorts =
     brName:
     lib.concatMap (
@@ -367,18 +399,18 @@ let
     ) veths;
 
   # The addressable endpoints in the broadcast domain spanned by brName,
-  # i.e. the ports of brName and of every bridge reachable from it.
+  # i.e. the ports of brName and of every bridge/layer2Transparent reachable from it.
   broadcastDomain =
     brName:
-    lib.filter (port: !isBridge port) (
+    lib.filter (port: !isLayer2Transparent port) (
       lib.concatMap (b: bridgePorts b.key) (builtins.genericClosure {
         startSet = [ { key = brName; } ];
-        operator = b: map (port: { key = port.node; }) (lib.filter isBridge (bridgePorts b.key));
+        operator = b: map (port: { key = port.node; }) (lib.filter isLayer2Transparent (bridgePorts b.key));
       })
     );
 
   # Every L2 broadcast domain as a list of member endpoints.
-  # A domain is all interfaces wired together by veths and bridges.
+  # A domain is all interfaces wired together by veths, bridges and layer2Transparent nodes.
   allDomains =
     let
       domainKey = members: lib.concatStringsSep "," (
@@ -389,7 +421,7 @@ let
           map (members: {
             name = domainKey members;
             value = members;
-          }) (map broadcastDomain config.bridges)
+          }) (map broadcastDomain layer2TransparentNodes)
         )
       );
     in
@@ -397,7 +429,7 @@ let
     ++ map (v: [
       v.a
       v.b
-    ]) (lib.filter (v: !isBridge v.a && !isBridge v.b) veths);
+    ]) (lib.filter (v: !isLayer2Transparent v.a && !isLayer2Transparent v.b) veths);
 
   # ARP prefill: one shared `neigh add` batch per domain, `%DEV%` swapped in per target via bash
   arpPrefillCommands =
@@ -510,6 +542,8 @@ let
       (mkBashSection "set interfaces up" (mkGroupedIpBatch (nodeLoUpCommands ++ linkIfUpCommands ++ dummyIfUpCommands)))
       (mkBashSection "configure mtu" (mkGroupedIpBatch linkMtuCommands))
       (mkBashSection "configure arp" (mkGroupedIpBatch linkArpCommands))
+      (mkBashSection "configure link flags" (mkGroupedIpBatch (mkIfaceCommands linkModule "link")))
+      (mkBashSection "configure ethtool" (mkGroupedNsExec (mkIfaceCommands ethtoolModule "ethtool")))
       (mkBashSection "configure netem" linkNetemCommands)
       (mkBashSection "prefill arp" arpPrefillCommands)
       (mkBashSection "configure ipv4 routing" ipv4RouteCommands)

@@ -176,6 +176,16 @@ lib.types.submodule {
                 default = null;
                 description = "Prefill ARP table with the peer's MAC address. Overrides veth-level and top-level arpPrefill.";
               };
+              link = lib.mkOption {
+                type = (import ./link_options.nix { inherit pkgs; }).type;
+                default = { };
+                description = "Direct mappings of `ip link set` flags (see ip-link(8)) for this interface. Each field overrides veth-level and top-level link settings individually.";
+              };
+              ethtool = lib.mkOption {
+                type = (import ./ethtool_options.nix { inherit pkgs; }).type;
+                default = { };
+                description = "Direct mappings of `ethtool` settings (see ethtool(8)) for this interface. Each field overrides veth-level and top-level ethtool settings individually.";
+              };
             };
           }
         );

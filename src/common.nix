@@ -33,6 +33,39 @@ in
       inherit (attrsType) getSubOptions;
     };
 
+  # Nullable bool/unsigned-int mkOption, default null. Shared by link_options.nix and ethtool_options.nix.
+  mkNullableBoolOption = description: lib.mkOption {
+    type = lib.types.nullOr lib.types.bool;
+    default = null;
+    inherit description;
+  };
+  mkNullableIntOption = description: lib.mkOption {
+    type = lib.types.nullOr lib.types.ints.unsigned;
+    default = null;
+    inherit description;
+  };
+
+  # Shape shared by the cascading (interface > veth > top-level) option modules,
+  # link_options.nix and ethtool_options.nix: `fieldNames` for testbed_options.nix
+  # to resolve, `cascadeType` for the veth-level and top-level options, and `type`
+  # for the interface-level one, which additionally takes an `extraArgs` escape
+  # hatch (no sensible override-vs-merge default across 3 levels).
+  mkCascade =
+    { options, extraArgsDescription }:
+    {
+      fieldNames = lib.attrNames options;
+      cascadeType = lib.types.submodule { inherit options; };
+      type = lib.types.submodule {
+        options = options // {
+          extraArgs = lib.mkOption {
+            type = lib.types.nullOr (lib.types.listOf lib.types.str);
+            default = null;
+            description = extraArgsDescription;
+          };
+        };
+      };
+    };
+
   # Pick the first non-null value for `field` from a priority-ordered list of attrsets (nulls skipped).
   resolveFirst =
     field: sources:

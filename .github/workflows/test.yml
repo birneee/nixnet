@@ -23,3 +23,20 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Run tests
         run: nix run .#test
+
+  # vendor/ is generated from nixpkgs' ethtool, so a bump can silently outdate it
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@v22
+      - name: Check vendored data is up to date
+        run: |
+          nix develop --command ./vendor/update.sh
+          # --porcelain, not `diff --exit-code`: also catches a file never committed
+          if [ -n "$(git status --porcelain vendor/)" ]; then
+            git status --short vendor/
+            git diff vendor/
+            echo "::error::vendor/ is stale — rerun \`nix develop --command ./vendor/update.sh\` and commit"
+            exit 1
+          fi

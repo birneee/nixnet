@@ -173,7 +173,7 @@ For option documentation and completions with [nixd](https://github.com/nix-comm
 ## Contributing
 
 Contributions are welcome! Feel free to open issues or pull requests.
-See [CONTRIBUTION.md](CONTRIBUTION.md) for guidelines.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 

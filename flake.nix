@@ -42,6 +42,16 @@
             });
           };
 
+          # what vendor/update.sh needs on PATH
+          devShells.default = pkgs.mkShellNoCC {
+            packages = with pkgs; [
+              pandoc
+              jq
+              gnutar
+              xz
+            ];
+          };
+
           legacyPackages =
             let
               common = import ./src/common.nix { inherit pkgs; };

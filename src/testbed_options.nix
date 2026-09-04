@@ -20,6 +20,8 @@ let
 
   nixosSysctlOption = nixosOpts.boot.kernel.sysctl;
   netem = import ./netem_options.nix { inherit pkgs; };
+  linkModule = import ./link_options.nix { inherit pkgs; };
+  ethtoolModule = import ./ethtool_options.nix { inherit pkgs; };
   inherit (import ./common.nix { inherit pkgs; }) attrsOrLegacyList busyboxMini resolveFirst;
 
   iface = lib.types.submodule {
@@ -87,6 +89,16 @@ in
                   default = null;
                   description = "Compute both endpoints' MAC addresses deterministically during nix evaluation instead of leaving it to the kernel at runtime. Overrides top-level deterministicMacAddress. Ignored for an endpoint whose interface sets macAddress explicitly.";
                 };
+                link = lib.mkOption {
+                  type = linkModule.cascadeType;
+                  default = { };
+                  description = "Direct mappings of `ip link set` flags (see ip-link(8)) for both endpoints of this veth pair. Each field overrides top-level link settings individually; overridden per-field by the interface-level link option. extraArgs is interface-level only.";
+                };
+                ethtool = lib.mkOption {
+                  type = ethtoolModule.cascadeType;
+                  default = { };
+                  description = "Direct mappings of `ethtool` settings (see ethtool(8)) for both endpoints of this veth pair. Each field overrides top-level ethtool settings individually; overridden per-field by the interface-level ethtool option. extraArgs is interface-level only.";
+                };
                 mtu =
                   let
                     nixosMtu = (nixosOpts.networking.interfaces.type.nestedTypes.elemType.getSubOptions [ ]).mtu;
@@ -138,6 +150,16 @@ in
       default = false;
       description = "Global default deterministicMacAddress setting for all interfaces. When enabled, MAC addresses are computed during nix evaluation (from node and interface name) instead of being assigned randomly by the kernel at runtime, so arpPrefill can embed them directly instead of reading them back at runtime.";
     };
+    link = lib.mkOption {
+      type = linkModule.cascadeType;
+      default = { };
+      description = "Global default `ip link set` flags (see ip-link(8)) for all interfaces. Each field is overridden per-field by veth-level and then interface-level link settings. extraArgs is interface-level only.";
+    };
+    ethtool = lib.mkOption {
+      type = ethtoolModule.cascadeType;
+      default = { };
+      description = "Global default `ethtool` settings (see ethtool(8)) for all interfaces. Each field is overridden per-field by veth-level and then interface-level ethtool settings. extraArgs is interface-level only.";
+    };
     mtu =
       let
         nixosMtu = (nixosOpts.networking.interfaces.type.nestedTypes.elemType.getSubOptions [ ]).mtu;
@@ -177,6 +199,7 @@ in
         coreutils
         iproute2
         util-linuxMinimal
+        ethtool
       ];
       description = "Packages prepended to PATH for testbed hooks (preSetup, postSetup, preRun, postRun) and testbed-level scripts. Defaults to a set of standard tools; extend with \`lib.mkOptionDefault [ yourPkg ]\`.";
     };
@@ -254,7 +277,7 @@ in
     name = lib.mkOption {
       type = lib.types.str;
       default = "testbed";
-      description = "Name of the output binary.";
+      description = "Name of the experiment, used as the derivation's package name (e.g. its Nix store path prefix) and as a filename prefix for generated node/testbed script files. The public entry point users run is always $out/bin/0-clear regardless of this value.";
     };
   };
 
@@ -306,6 +329,12 @@ in
             arp = lib.mkDefault (resolveFirst "arp" [ veth config ]);
             arpPrefill = lib.mkDefault (resolveFirst "arpPrefill" [ veth config ]);
             macAddress = lib.mkDefault (deterministicMacAddresses.${macKey endpoint} or null);
+            link = lib.genAttrs linkModule.fieldNames (
+              field: lib.mkDefault (resolveFirst field [ veth.link config.link ])
+            );
+            ethtool = lib.genAttrs ethtoolModule.fieldNames (
+              field: lib.mkDefault (resolveFirst field [ veth.ethtool config.ethtool ])
+            );
           }
         ) allVethEndpoints
       );
