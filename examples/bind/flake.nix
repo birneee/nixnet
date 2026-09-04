@@ -50,6 +50,8 @@
                     # Try to run mktemp - if it succeeds (which it shouldn't), exit script with code 1
                     mktemp -p ${roHostBind "/tmp"} && exit 1
                     set -e
+
+                    cat ${roHostBind ./file.txt}
                   '';
                   await = true;
                 };

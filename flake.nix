@@ -75,28 +75,28 @@
                   failed = lib.filter (a: !a.assertion) result.config.assertions;
                 in
                 if failed != [ ] then throw (lib.concatMapStringsSep "\n" (a: a.message) failed) else result;
+
+              hostBindHelper = isReadOnly: p:
+                # check if p is a string or a path, otherwise throw
+                if !(lib.isString p || lib.isPath p) then throw "nixnet: ${if isReadOnly then "roH" else "h"}ostBind: expected a string or path, got ${lib.typeOf p}"
+                # if p is string, it must be absolute path, otherwise throw
+                else if lib.isString p && builtins.substring 0 1 p != "/" then throw "nixnet: ${if isReadOnly then "roH" else "h"}ostBind: expected an absolute path, got ${p}. For relative paths, use a path type instead of a string."
+                else
+                  let
+                    path = toString p;
+                    # The store file marker embeds path in the string's Nix context without changing
+                    # its value, allowing extractHostBinds to recover path at eval time.
+                    marker = builtins.toFile "nixnet-${if isReadOnly then "ro-" else ""}hostbind" path;
+                  in
+                  "/${if isReadOnly then "ro-" else ""}host${path}${builtins.substring 0 0 marker}";
             in
             rec {
               options = (lib.evalModules { modules = [ baseModule ]; }).options;
               # Returns the path where p will be bind-mounted inside the jail (/host<p>).
-              # The store file marker embeds p in the string's Nix context without changing
-              # its value, allowing extractHostBinds to recover p at eval time.
-              hostBind =
-                p:
-                let
-                  marker = builtins.toFile "nixnet-hostbind" p;
-                in
-                "/host${p}${builtins.substring 0 0 marker}";
+              hostBind = hostBindHelper false;
 
               # Returns the path where p will be readonly bind-mounted inside the jail (/ro-host<p>).
-              # The store file marker embeds p in the string's Nix context without changing
-              # its value, allowing extractHostBinds to recover p at eval time.
-              roHostBind =
-                p:
-                let
-                  marker = builtins.toFile "nixnet-ro-hostbind" p;
-                in
-                "/ro-host${p}${builtins.substring 0 0 marker}";
+              roHostBind = hostBindHelper true;
 
               # Like pkgs.linkFarm but entries with hostBind or roHostBind paths are automatically
               # detected and bind-mounted into nodes at /host/... or /ro-host/..., respectively
