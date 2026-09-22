@@ -5,26 +5,34 @@
 # Commands: add <name> (create named jail), enter <name> <cmd> (re-enter), exec <cmd> (one-shot).
 set -euo pipefail
 
+# root (incl. mapped root inside another jail) needs no userns of its own
+_has_userns() { [ "$(id -u)" -ne 0 ]; }
+
 _unshare_jail() {
   export NAME="$1"; shift
   export WAYLAND=false
   export CHDIR="/pwd"
   export JAIL_BINDS=""
   export JAIL_SETENV=""
+  export STATUS_FD=""
   while [[ "${1:-}" == --* ]]; do
     case "$1" in
-      --wayland)  WAYLAND=true; shift ;;
-      --bind)     JAIL_BINDS+="rw:${2}:${3}"$'\n'; shift 3 ;;
-      --ro-bind)  JAIL_BINDS+="ro:${2}:${3}"$'\n'; shift 3 ;;
-      --setenv)   JAIL_SETENV+="${2}"$'\n'; shift 2 ;;
-      --chdir)    CHDIR="$2"; shift 2 ;;
+      --wayland)         WAYLAND=true; shift
+                         set -- --bind-try /dev/dri /dev/dri --bind-try /run/opengl-driver /run/opengl-driver "$@" ;;
+      --bind)            JAIL_BINDS+="rw:${2}:${3}"$'\n'; shift 3 ;;
+      --ro-bind)         JAIL_BINDS+="ro:${2}:${3}"$'\n'; shift 3 ;;
+      --bind-try)        [ -e "$2" ] && JAIL_BINDS+="rw:${2}:${3}"$'\n'; shift 3 ;;
+      --ro-bind-try)     [ -e "$2" ] && JAIL_BINDS+="ro:${2}:${3}"$'\n'; shift 3 ;;
+      --setenv)          JAIL_SETENV+="${2}"$'\n'; shift 2 ;;
+      --chdir)           CHDIR="$2"; shift 2 ;;
+      --json-status-fd)  STATUS_FD="$2"; shift 2 ;;
       *) echo "jail: unknown flag: $1" >&2; exit 1 ;;
     esac
   done
 
-  local user_args=("--user" "--map-root-user")
-  if [ "$(id -u)" -eq 0 ]; then
-    user_args=()
+  local user_args=()
+  if _has_userns; then
+    user_args=("--user" "--map-root-user")
   fi
 
   # --net creates an isolated network stack. 
@@ -44,7 +52,7 @@ _unshare_jail() {
     mkdir -p "/var/run/netns"
     touch "/run/jail/$NAME/user"
     touch "/var/run/netns/$NAME"
-    if [ "$(id -u)" -ne 0 ]; then
+    if _has_userns; then
       user_args=("--user=/run/jail/$NAME/user" "--map-root-user")
     fi
     net_arg="--net=/var/run/netns/$NAME"
@@ -80,7 +88,7 @@ _jail_enter() {
   local _init_pid
   _init_pid="$(< "/run/jail/$_name/pid")"
   local _user_arg=("--user=/run/jail/$_name/user")
-  if [ "$(id -u)" -eq 0 ]; then _user_arg=(); fi
+  if ! _has_userns; then _user_arg=(); fi
   # setpriv --pdeathsig TERM delivers SIGTERM to the entered command if its
   # nsenter parent is killed, so signalling a single `jail enter` tears down just
   # that command (running its cleanup trap) instead of orphaning it in the jail.
@@ -100,17 +108,84 @@ _jail_enter() {
       "$@"
 }
 
+# background pasta publishing "-p|-u SPEC" pairs $2.. of jail with outer pid $1
+_pasta_publish() {
+  local _pid=$1
+  shift
+  local _args=(--config-net)
+  while [ "$#" -gt 0 ]; do
+    _args+=("${1/-p/-t}" "$2") # jail -p is pasta -t
+    shift 2
+  done
+  if _has_userns; then
+    _args+=("$_pid")
+  else
+    # no jail userns, bare pid would setns into our own (EINVAL)
+    _args+=(--netns-only --netns="/proc/$_pid/ns/net")
+  fi
+  pasta "${_args[@]}" &
+}
+
+# -p/-u [HOST_ADDR/]HOST_PORT[:JAIL_PORT]: publish jail TCP/UDP port on host via pasta
+# exec: needs jail's host pid, so run as job, wait on status fd, forward exit code
+# -p/-u must lead the flags
 _jail_exec() {
-  _unshare_jail "" "$@"
+  local _publish=()
+  while [[ "${1:-}" == -p || "${1:-}" == -u ]]; do
+    _publish+=("$1" "$2")
+    shift 2
+  done
+
+  if [ "${#_publish[@]}" -eq 0 ]; then
+    _unshare_jail "" "$@"
+  fi
+
+  local _fifo
+  _fifo=$(mktemp -u)
+  mkfifo "$_fifo"
+  local _status_fd
+  exec {_status_fd}<> "$_fifo"
+  rm -f "$_fifo"
+
+  # <&0: background jobs otherwise get /dev/null as stdin
+  _unshare_jail "" --json-status-fd "$_status_fd" "$@" <&0 &
+  local _job=$!
+
+  # we hold the fifo's write end too, so no EOF if the jail dies before reporting
+  local _status
+  until read -r -t 0.1 -u "$_status_fd" _status; do
+    kill -0 "$_job" 2>/dev/null || wait "$_job" || exit $?
+  done
+  exec {_status_fd}>&-
+  local _pid="${_status#*: }"
+  _pid="${_pid%\}}"
+
+  local _pasta_pid=""
+  if [[ "$_pid" =~ ^[0-9]+$ ]]; then
+    _pasta_publish "$_pid" "${_publish[@]}"
+    _pasta_pid=$!
+  else
+    echo "jail: -p: failed to read the jail's pid, ports not published" >&2
+  fi
+
+  trap '[ -z "$_pasta_pid" ] || kill "$_pasta_pid" 2>/dev/null || true' EXIT
+  trap 'kill -INT "$_job" 2>/dev/null || true' INT
+  trap 'kill -TERM "$_job" 2>/dev/null || true' TERM
+
+  local _exit=0
+  wait "$_job" || _exit=$?
+  exit "$_exit"
 }
 
 _jail_add() {
   local _flags=()
-  while [[ "${1:-}" == --* ]]; do
+  local _publish=()
+  while [[ "${1:-}" == --* || "${1:-}" == -p || "${1:-}" == -u ]]; do
     case "$1" in
-      --bind|--ro-bind) _flags+=("$1" "$2" "$3"); shift 3 ;;
+      --bind|--ro-bind|--bind-try|--ro-bind-try) _flags+=("$1" "$2" "$3"); shift 3 ;;
       --setenv|--chdir) _flags+=("$1" "$2"); shift 2 ;;
       --wayland)        _flags+=("$1"); shift ;;
+      -p|-u)            _publish+=("$1" "$2"); shift 2 ;;
       *) echo "jail add: unknown flag: $1" >&2; exit 1 ;;
     esac
   done
@@ -125,6 +200,12 @@ _jail_add() {
   read -r _init_pid < "$_fifo"
   rm -f "$_fifo"
   printf '%s\n' "$_init_pid" > "/run/jail/$_name/pid"
+
+  # pasta outlives this call, dies with the jail's netns
+  if [ "${#_publish[@]}" -gt 0 ]; then
+    _pasta_publish "$_init_pid" "${_publish[@]}"
+    disown
+  fi
 }
 
 cmd="${1:-}"
@@ -141,7 +222,7 @@ case "$cmd" in
     _jail_enter "$@"
     ;;
   *)
-    echo "usage: jail add <name> | jail exec <cmd>... | jail enter <name> <cmd>..." >&2
+    echo "usage: jail add [-p|-u [HOST_PORT:]NS_PORT]... <name> | jail exec [-p|-u [HOST_PORT:]NS_PORT]... <cmd>... | jail enter <name> <cmd>..." >&2
     exit 1
     ;;
 esac

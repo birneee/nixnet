@@ -7,6 +7,7 @@ let
     coreutils
     util-linuxMinimal
     busyboxMini
+    passt
   ];
   jail_init = pkgs.runCommand "jail_init" { nativeBuildInputs = [ pkgs.gcc pkgs.patchelf ]; } ''
     mkdir -p $out/bin

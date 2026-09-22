@@ -22,6 +22,7 @@ let
   netem = import ./netem_options.nix { inherit pkgs; };
   linkModule = import ./link_options.nix { inherit pkgs; };
   ethtoolModule = import ./ethtool_options.nix { inherit pkgs; };
+  publishPortsType = import ./publish_port_options.nix { inherit pkgs; };
   inherit (import ./common.nix { inherit pkgs; }) attrsOrLegacyList busyboxMini resolveFirst;
 
   iface = lib.types.submodule {
@@ -58,13 +59,7 @@ in
 
     veths = lib.mkOption {
       default = { };
-      apply =
-        val:
-        if builtins.isList val then
-          throw "nixnet: `veths` is now an attrset — use `veths.<name> = { a.node = ...; b.node = ...; }`"
-        else
-          val;
-      type = attrsOrLegacyList (
+      type = attrsOrLegacyList "nixnet: `veths` is now an attrset — use `veths.<name> = { a.node = ...; b.node = ...; }`" (
         lib.types.attrsOf (
           lib.types.submodule (
             { name, ... }: {
@@ -133,6 +128,17 @@ in
       default = [ ];
       type = lib.types.listOf lib.types.str;
       description = "Bridges to create. Each bridge gets its own node of the same name.";
+    };
+
+    publishPorts = lib.mkOption {
+      default = [ ];
+      type = publishPortsType;
+      description = ''
+        Ports in the testbed's own netns (top-level `scripts`) to publish on the real host,
+        e.g. `curl http://localhost:<port>`. No root needed, uses pasta.
+        Entries are a bare (TCP) port or `{ port, hostPort ? port, protocol ? "tcp", hostAddr ? null }`.
+        See per-node `publishPorts` for ports inside nodes.
+      '';
     };
 
     arp = lib.mkOption {
@@ -238,13 +244,7 @@ in
     };
     scripts = lib.mkOption {
       default = { };
-      apply =
-        val:
-        if builtins.isList val then
-          throw "nixnet: `scripts` is now an attrset — use `scripts.<name> = { exec = ...; }`"
-        else
-          val;
-      type = attrsOrLegacyList (
+      type = attrsOrLegacyList "nixnet: `scripts` is now an attrset — use `scripts.<name> = { exec = ...; }`" (
         lib.types.attrsOf (
           lib.types.submodule {
             options = {
@@ -370,11 +370,31 @@ in
               }
             ]) config.veths
           );
+          allPublishPorts = config.publishPorts ++ lib.concatLists (lib.mapAttrsToList (_: c: c.publishPorts) config.nodes);
+          # unset hostAddr binds all addresses, so it clashes with any address
+          publishPortsClash =
+            a: b:
+            a.protocol == b.protocol
+            && a.hostPort == b.hostPort
+            && (a.hostAddr == b.hostAddr || a.hostAddr == null || b.hostAddr == null);
+          duplicatePublishPorts = lib.unique (
+            lib.concatLists (
+              lib.imap0 (
+                i: a:
+                lib.optional (lib.any (publishPortsClash a) (lib.take i allPublishPorts ++ lib.drop (i + 1) allPublishPorts))
+                  "${a.protocol}:${lib.optionalString (a.hostAddr != null) "${a.hostAddr}:"}${toString a.hostPort}"
+              ) allPublishPorts
+            )
+          );
         in
         [
           {
             assertion = deterministicCollisions == [ ];
             message = "nixnet: deterministicMacAddress collision: ${lib.concatStringsSep ", " deterministicCollisions} — set macAddress explicitly to resolve";
+          }
+          {
+            assertion = duplicatePublishPorts == [ ];
+            message = "nixnet: publishPorts used more than once (across the top level and nodes combined): ${lib.concatMapStringsSep ", " toString duplicatePublishPorts}";
           }
         ]
         ++ renamedNsAssertions;

@@ -23,15 +23,18 @@ in
     }) [ "sed" "sysctl" "grep" "awk" "find" "xargs" ]
   );
 
-  # Attrs type that still type-checks the legacy list form, so `apply` can throw a
-  # migration error instead of a type error. `either` hides sub-options from the
-  # option docs, so restore them from the attrs type.
+  # jail -p/-u flag publishing a publishPorts entry
+  mkPublishFlag =
+    { protocol, hostAddr, hostPort, port, ... }:
+    "${if protocol == "udp" then "-u" else "-p"} "
+    + (if hostAddr != null then "${hostAddr}/" else "")
+    + toString hostPort
+    + (lib.optionalString (port != hostPort) ":${toString port}");
+
+  # Attrs type throwing a migration error for the legacy list form
   attrsOrLegacyList =
-    attrsType:
-    lib.types.either (lib.types.listOf lib.types.anything) attrsType
-    // {
-      inherit (attrsType) getSubOptions;
-    };
+    message: attrsType:
+    lib.types.coercedTo (lib.types.listOf lib.types.anything) (_: throw message) attrsType;
 
   # Nullable bool/unsigned-int mkOption, default null. Shared by link_options.nix and ethtool_options.nix.
   mkNullableBoolOption = description: lib.mkOption {

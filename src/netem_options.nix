@@ -15,9 +15,9 @@ lib.types.submodule {
       description = "Packet loss percentage between 0 and 100 (e.g. 1 for 1%).";
     };
     rateMbit = lib.mkOption {
-      type = lib.types.nullOr lib.types.int;
+      type = lib.types.nullOr lib.types.number;
       default = null;
-      description = "Rate limit in Mbit/s.";
+      description = "Rate limit in Mbit/s (fractions allowed, e.g. 0.1).";
     };
     limit = lib.mkOption {
       type = lib.types.nullOr lib.types.int;

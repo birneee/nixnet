@@ -6,6 +6,7 @@
 let
   lib = pkgs.lib;
   inherit (import ./common.nix { inherit pkgs; }) attrsOrLegacyList;
+  publishPortsType = import ./publish_port_options.nix { inherit pkgs; };
 in
 lib.types.submodule {
   options = {
@@ -16,13 +17,7 @@ lib.types.submodule {
     };
     scripts = lib.mkOption {
       default = { };
-      apply =
-        val:
-        if builtins.isList val then
-          throw "nixnet: `scripts` is now an attrset — use `scripts.<name> = { exec = ...; }`"
-        else
-          val;
-      type = attrsOrLegacyList (
+      type = attrsOrLegacyList "nixnet: `scripts` is now an attrset — use `scripts.<name> = { exec = ...; }`" (
         lib.types.attrsOf (
           lib.types.submodule {
             options = {
@@ -56,6 +51,15 @@ lib.types.submodule {
       type = lib.types.nullOr lib.types.str;
       default = "{node}";
       description = "Working directory for this node. Relative to the testbed workDir if not absolute. \`{node}\` is replaced with the node name.";
+    };
+    publishPorts = lib.mkOption {
+      default = [ ];
+      type = publishPortsType;
+      description = ''
+        Ports in this node to publish on the real host, e.g. `curl http://localhost:<port>`.
+        No root needed. Entries are a bare (TCP) port or `{ port, hostPort ? port, protocol ? "tcp", hostAddr ? null }`.
+        See top-level `publishPorts` for the testbed's own context.
+      '';
     };
     sysctl = nixosSysctlOption;
     networking = lib.mkOption {

@@ -25,6 +25,7 @@ let
     concatNonEmpty
     mkPathLines
     resolveNetem
+    mkPublishFlag
     ;
   linkModule = import ./link_options.nix { inherit pkgs; };
   ethtoolModule = import ./ethtool_options.nix { inherit pkgs; };
@@ -119,6 +120,23 @@ let
   # Union of all node auto host bind paths.
   tbAutoHostBinds = lib.unique (lib.concatLists (lib.attrValues nodeAutoHostBinds));
 
+  # node publishPorts, two chained -p hops: jail add publishes freePort in testbed netns,
+  # jail exec (testbed_jail.nix) maps host port to it
+  # freePorts count up from 40000, skipping ports the testbed itself serves
+  publishPortMappings =
+    let
+      nodePublishPorts = lib.concatLists (
+        lib.mapAttrsToList (
+          nodeName: nodeCfg: map (spec: { inherit nodeName; } // spec) nodeCfg.publishPorts
+        ) nodes
+      );
+      testbedPorts = map (spec: spec.port) config.publishPorts;
+      freePorts = lib.filter (p: !lib.elem p testbedPorts) (
+        lib.range 40000 (40000 + lib.length nodePublishPorts + lib.length testbedPorts)
+      );
+    in
+    lib.zipListsWith (e: freePort: e // { inherit freePort; }) nodePublishPorts freePorts;
+
   # Create nodes (including bridge nodes)
   nodeCreateCommands =
     let
@@ -150,6 +168,9 @@ let
           else
             " \\\n  --bind '/host${binding.path}' '/host${binding.path}'"
         ) (nodeAutoHostBinds.${name} or [ ]);
+        publish = lib.concatMapStrings (
+          m: " \\\n  ${mkPublishFlag (m // { hostAddr = null; hostPort = m.freePort; })}"
+        ) (lib.filter (m: m.nodeName == name) publishPortMappings);
       in
       lib.concatStringsSep "\n" (
         [ "_PATH=\"\" # clear path" ]
@@ -158,7 +179,7 @@ let
         ++ [
           "jail add \\\n  --setenv PATH=$_PATH${
             lib.optionalString (dir != "") " \\\n  --bind '${dir}' /pwd \\\n  --chdir /pwd"
-          }${wayland}${pipewire}${binds} \\\n  ${name}"
+          }${wayland}${pipewire}${binds}${publish} \\\n  ${name}"
         ]
       )
     ) nonBridgeNames
@@ -223,7 +244,7 @@ let
         # BDP in packets: BDP_bytes / mtu
         bdpPackets =
           if n.delayMs != null && n.rateMbit != null && mtu != null then
-            n.rateMbit * 1000000 / 8 * n.delayMs / 1000 / mtu
+            builtins.floor (n.rateMbit * 1000000 / 8 * n.delayMs / 1000 / mtu)
           else
             null;
         effectiveLimit =
@@ -643,7 +664,7 @@ let
     ${runPhaseSections}'';
 in
 {
-  inherit scriptText tbAutoHostBinds;
+  inherit scriptText tbAutoHostBinds publishPortMappings;
   nodeScriptFiles = nodeScripts.nsScriptFiles;
   tbScriptFiles = nodeScripts.tbScriptFiles;
 }

@@ -60,14 +60,6 @@ if [ "$WAYLAND" = true ]; then
   mkdir -p "$NEW_ROOT/run/user/0"
   touch "$NEW_ROOT/run/user/0/wayland-0"
   mount --rbind "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" "$NEW_ROOT/run/user/0/wayland-0"
-  if [ -e /dev/dri ]; then
-    mkdir -p "$NEW_ROOT/dev/dri"
-    mount --bind /dev/dri "$NEW_ROOT/dev/dri"
-  fi
-  if [ -d /run/opengl-driver ]; then
-    mkdir -p "$NEW_ROOT/run/opengl-driver"
-    mount --bind /run/opengl-driver "$NEW_ROOT/run/opengl-driver"
-  fi
 fi
 _ENV=(
   "PWD=$CHDIR"
@@ -89,12 +81,15 @@ while IFS= read -r _e; do
 done <<< "$JAIL_SETENV"
 mkdir -p "$NEW_ROOT$CHDIR"
 mount -t proc proc "$NEW_ROOT/proc"
+# outer pid via old /proc, before pivot_root; read builtin to not fork
+read -r _outer_pid _ < /proc/self/stat
 if [ -n "$NAME" ]; then
   printf "%s\n" "${_ENV[@]}" > "/run/jail/$NAME/env"
   # write outer init PID of jail to fifo before pivot_root
-  # use read builtin to not fork 
-  read -r _outer_pid _ < /proc/self/stat
   printf "%s\n" "$_outer_pid" > "/run/jail/$NAME/.pid_fifo"
+fi
+if [ -n "${STATUS_FD:-}" ]; then
+  printf '{"child-pid": %s}\n' "$_outer_pid" >&"$STATUS_FD"
 fi
 pivot_root "$NEW_ROOT" "$NEW_ROOT/old_root"
 if [ "$HAS_USERNS" -ne 0 ]; then

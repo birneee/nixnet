@@ -54,10 +54,18 @@ pkgs.stdenv.mkDerivation {
     let
       anyNodeShareWayland = lib.any (node: node.shareWayland) (lib.attrValues nodes);
       anyNodeSharePipeWire = lib.any (node: node.sharePipeWire) (lib.attrValues nodes);
-      jailFlags = [
+
+      # -p/-u must lead; node publishPorts go via the free port their jail add published
+      jailFlags =
+        map common.mkPublishFlag config.publishPorts
+      ++ map (m: common.mkPublishFlag (m // { port = m.freePort; })) gen.publishPortMappings
+      ++ [
         ''--setenv "PATH=$PATH"''
       ]
       ++ lib.optional (config.shareWayland || anyNodeShareWayland) "--wayland"
+      # pasta in the testbed (node publishPorts) creates its tap device via tun
+      # todo check: host tun bound into the jail can leak between host and guest
+      ++ lib.optional (gen.publishPortMappings != [ ]) "--bind /dev/net/tun /dev/net/tun"
       ++ lib.optionals (config.sharePipeWire || anyNodeSharePipeWire) [
         ''--ro-bind "$XDG_RUNTIME_DIR/''${PIPEWIRE_REMOTE:-pipewire-0}" "/run/user/0/pipewire-0"''
         ''--ro-bind "$XDG_RUNTIME_DIR/pulse/native" "/run/user/0/pulse/native"''

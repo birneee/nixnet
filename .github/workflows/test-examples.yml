@@ -38,6 +38,8 @@ jobs:
           - name: phantomlink
           - name: tcpreplay
           - name: quic-go
+          - name: publish_http_port
+            skip_run: true # runs until interrupted
     steps:
       - uses: actions/checkout@v6
       - uses: DeterminateSystems/nix-installer-action@v22
