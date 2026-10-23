@@ -5,7 +5,16 @@ on:
     branches:
       - main
       - dev
+    paths: &paths
+      - flake.nix
+      - flake.lock
+      - src/**
+      - jail/**
+      - vendor/**
+      - tests/**
+      - .github/workflows/test.yml
   pull_request:
+    paths: *paths
 
 jobs:
   check:
