@@ -1,0 +1,31 @@
+name: Update Example Flake Locks
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - flake.nix
+      - flake.lock
+      - src/**
+      - jail/**
+      - vendor/**
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@v22
+      - name: Update flake locks
+        run: ./scripts/update-examples
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add examples/*/flake.lock
+          git diff --cached --quiet || git commit -m "update nixnet in example flake locks"
+          git push
