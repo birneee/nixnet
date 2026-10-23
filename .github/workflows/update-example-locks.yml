@@ -1,0 +1,32 @@
+name: Update Example Flake Locks
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - flake.nix
+      - flake.lock
+      - src/**
+      - jail/**
+      - vendor/**
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@v22
+      - name: Update flake locks
+        run: ./scripts/update-examples
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: update-example-locks
+          commit-message: update nixnet in example flake locks
+          title: update nixnet in example flake locks
+          body: Automated `nix flake update nixnet` of all examples.
+          delete-branch: true
