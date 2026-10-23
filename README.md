@@ -39,7 +39,7 @@ Reproducible network experiments with a single command, on a single machine — 
             };
           };
           veths.eth0 = {
-            netem.loss.percent = 1;
+            netem.loss.random.percent = 1;
             a.node = "client";
             b.node = "server";
           };

@@ -19,18 +19,21 @@ let
     }).options;
 
   nixosSysctlOption = nixosOpts.boot.kernel.sysctl;
-  netem = import ./netem_options.nix { inherit pkgs; };
+  netemModule = import ./netem_options.nix { inherit pkgs; };
   linkModule = import ./link_options.nix { inherit pkgs; };
   ethtoolModule = import ./ethtool_options.nix { inherit pkgs; };
-  inherit (import ./common.nix { inherit pkgs; }) attrsOrLegacyList busyboxMini resolveFirst;
+  inherit (import ./common.nix { inherit pkgs; })
+    attrsOrLegacyList
+    busyboxMini
+    mkRemovedOption
+    removedOptionAssertion
+    resolveFirst
+    resolveNetem
+    ;
 
   iface = lib.types.submodule {
     options = {
-      ns = lib.mkOption {
-        visible = false;
-        default = null;
-        type = lib.types.nullOr lib.types.str;
-      };
+      ns = mkRemovedOption;
       node = lib.mkOption {
         type = lib.types.str;
         description = "Node or bridge for this endpoint.";
@@ -70,9 +73,9 @@ in
             { name, ... }: {
               options = {
                 netem = lib.mkOption {
-                  type = lib.types.nullOr netem;
+                  type = lib.types.nullOr netemModule.cascadeType;
                   default = null;
-                  description = "netem traffic shaping parameters applied to both endpoints. Individual fields can be overridden per interface via networking.interfaces.";
+                  description = "netem traffic shaping parameters applied to both endpoints. Individual fields can be overridden per interface via networking.interfaces. extraArgs is interface-level only.";
                 };
                 arp = lib.mkOption {
                   type = lib.types.nullOr lib.types.bool;
@@ -358,18 +361,35 @@ in
               if candidate != null && collidesElsewhere endpoint candidate then candidate else null
             ) deterministicEndpoints
           );
-          renamedNsAssertions = lib.concatLists (
-            lib.mapAttrsToList (vethName: veth: [
-              {
-                assertion = veth.a.ns == null;
-                message = "nixnet: `veths.${vethName}.a.ns` renamed to `node`";
-              }
-              {
-                assertion = veth.b.ns == null;
-                message = "nixnet: `veths.${vethName}.b.ns` renamed to `node`";
-              }
-            ]) config.veths
-          );
+          lossPercentMessage = "has been removed, use `loss.random.percent`";
+          removedOptionAssertions =
+            lib.concatLists (
+              lib.mapAttrsToList (vethName: veth: [
+                (removedOptionAssertion "veths.${vethName}.a.ns" veth.a.ns "has been renamed to `node`")
+                (removedOptionAssertion "veths.${vethName}.b.ns" veth.b.ns "has been renamed to `node`")
+                (removedOptionAssertion "veths.${vethName}.netem.lossPercent" (veth.netem.lossPercent or null) lossPercentMessage)
+              ]) config.veths
+            )
+            ++ lib.concatLists (
+              lib.mapAttrsToList (
+                nodeName: node:
+                lib.mapAttrsToList (
+                  ifaceName: iface:
+                  removedOptionAssertion "nodes.${nodeName}.networking.interfaces.${ifaceName}.netem.lossPercent" (
+                    iface.netem.lossPercent or null
+                  ) lossPercentMessage
+                ) node.networking.interfaces
+              ) config.nodes
+            );
+          netemAssertions = lib.concatMap (
+            veth:
+            lib.concatMap (
+              endpoint:
+              netemModule.assertions "${endpoint.node}:${endpoint.iface}" (
+                resolveNetem veth.netem config.nodes.${endpoint.node}.networking.interfaces.${endpoint.iface}.netem
+              )
+            ) [ veth.a veth.b ]
+          ) vethList;
         in
         [
           {
@@ -377,6 +397,7 @@ in
             message = "nixnet: deterministicMacAddress collision: ${lib.concatStringsSep ", " deterministicCollisions} — set macAddress explicitly to resolve";
           }
         ]
-        ++ renamedNsAssertions;
+        ++ removedOptionAssertions
+        ++ netemAssertions;
     };
 }

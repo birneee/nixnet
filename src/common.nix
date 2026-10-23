@@ -4,6 +4,17 @@ let
   lib = pkgs.lib;
   # Pick the first non-null element from a priority-ordered list.
   firstNonNull = builtins.foldl' (acc: x: if acc != null then acc else x) null;
+  # Hidden option keeping a removed one definable, so removedOptionAssertion can report it.
+  mkRemovedOption = lib.mkOption {
+    visible = false;
+    default = null;
+    type = lib.types.nullOr lib.types.anything;
+  };
+  # Assertion failing when the removed option at `path` is set.
+  removedOptionAssertion = path: value: message: {
+    assertion = value == null;
+    message = "nixnet: `${path}` ${message}";
+  };
 in
 {
   # Join non-empty strings with newlines.
@@ -71,22 +82,15 @@ in
     field: sources:
     firstNonNull (map (src: if src == null then null else src.${field} or null) sources);
 
-  # Module that declares a removed option and adds an assertion when it is set.
+  inherit mkRemovedOption removedOptionAssertion;
+
+  # Module that declares a removed top-level option and adds its assertion.
   mkRemovedOptionModule =
     name: message:
     { config, ... }:
     {
-      options.${name} = lib.mkOption {
-        visible = false;
-        default = null;
-        type = lib.types.nullOr lib.types.anything;
-      };
-      config.assertions = [
-        {
-          assertion = config.${name} == null;
-          message = "nixnet: `${name}` ${message}";
-        }
-      ];
+      options.${name} = mkRemovedOption;
+      config.assertions = [ (removedOptionAssertion name config.${name} message) ];
     };
 
   # Merge two netem configs field-by-field: interface fields override link fields.

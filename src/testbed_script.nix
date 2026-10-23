@@ -28,6 +28,7 @@ let
     ;
   linkModule = import ./link_options.nix { inherit pkgs; };
   ethtoolModule = import ./ethtool_options.nix { inherit pkgs; };
+  netemModule = import ./netem_options.nix { inherit pkgs; };
 
   # Emit a commented bash section only when lines is non-empty.
   mkBashSection =
@@ -216,74 +217,7 @@ let
   # Build a tc netem command string from a resolved netem config and interface.
   mkNetemCmd =
     ns: netemCfg: mtu: dev:
-    lib.optionalString (netemCfg != null) (
-      let
-        n = netemCfg;
-        # BDP in bytes: rateMbit * 1_000_000 / 8 * delayMs / 1000
-        # BDP in packets: BDP_bytes / mtu
-        bdpPackets =
-          if n.delayMs != null && n.rateMbit != null && mtu != null then
-            n.rateMbit * 1000000 / 8 * n.delayMs / 1000 / mtu
-          else
-            null;
-        effectiveLimit =
-          if n.limit != null then
-            n.limit
-          else if n.autoLimit == true then
-            if bdpPackets != null then
-              bdpPackets
-            else
-              throw "netem autoLimit requires delayMs, rateMbit, and mtu to all be set on interface '${dev}'"
-          else
-            null;
-        lossArg =
-          if n.loss == null then
-            ""
-          else if n.loss.model == "random" then
-            if n.loss.percent == null then
-              throw "netem loss model 'random' requires percent to be set on interface '${dev}'"
-            else
-              "loss random ${toString n.loss.percent}%"
-          else if n.loss.model == "state" then
-            if n.loss.p13 == null then
-              throw "netem loss model 'state' requires p13 to be set on interface '${dev}'"
-            else
-              "loss state "
-              + lib.concatStringsSep " " (
-                lib.filter (s: s != "") [
-                  (toString n.loss.p13)
-                  (lib.optionalString (n.loss.p31 != null) (toString n.loss.p31))
-                  (lib.optionalString (n.loss.p32 != null) (toString n.loss.p32))
-                  (lib.optionalString (n.loss.p23 != null) (toString n.loss.p23))
-                  (lib.optionalString (n.loss.p14 != null) (toString n.loss.p14))
-                ]
-              )
-          else if n.loss.model == "gemodel" then
-            if n.loss.percent == null then
-              throw "netem loss model 'gemodel' requires percent to be set on interface '${dev}'"
-            else
-              "loss gemodel "
-              + lib.concatStringsSep " " (
-                lib.filter (s: s != "") [
-                  (toString n.loss.percent)
-                  (lib.optionalString (n.loss.r != null) (toString n.loss.r))
-                  (lib.optionalString (n.loss.h != null) (toString n.loss.h))
-                  (lib.optionalString (n.loss.k != null) (toString n.loss.k))
-                ]
-              )
-          else
-            throw "unknown netem loss model '${n.loss.model}' on interface '${dev}'";
-        params = lib.concatStringsSep " " (
-          lib.filter (s: s != "") [
-            (lib.optionalString (n.delayMs != null) "delay ${toString n.delayMs}ms")
-            lossArg
-            (lib.optionalString (n.rateMbit != null) "rate ${toString n.rateMbit}Mbit")
-            (lib.optionalString (effectiveLimit != null) "limit ${toString effectiveLimit}")
-          ]
-        );
-      in
-      "tc -n ${ns} qdisc add dev ${dev} root netem ${params}"
-    );
+    lib.optionalString (netemCfg != null) "tc -n ${ns} qdisc add dev ${dev} root netem ${netemModule.mkArgs netemCfg mtu dev}";
 
   # Create veth pairs
   vethCreateCommands = map (

@@ -69,4 +69,30 @@ in
       await = true;
     };
   } 0;
+
+  # tc and the kernel accept every loss model and report back exactly the configured parameters
+  test-nixnet-netem-loss-models = mkExitCodeTest "netem-loss-models" {
+    name = "testbed";
+    nodes.a.scripts.check = {
+      exec = ''
+        tc qdisc show
+        tc qdisc show dev r | grep -F "loss 1% 25% duplicate 1%" &&
+          tc qdisc show dev s | grep -F "loss state p13 5% p31 50% p32 10% p23 100% p14 0%" &&
+          tc qdisc show dev g | grep -F "loss gemodel p 1% r 10% 1-h 70% 1-k 0.5%" | grep -F ecn
+      '';
+      await = true;
+    };
+    # interface-level extraArgs combine with the veth-level loss
+    nodes.a.networking.interfaces.r.netem.extraArgs = [ "duplicate" "1%" ];
+    nodes.b = { };
+    veths = lib.mapAttrs (_: netem: { inherit netem; a.node = "a"; b.node = "b"; }) {
+      r.loss.random = { percent = 1; correlation = 25; };
+      # p23 and p14 unset, tc fills in its defaults
+      s.loss.state = { p13 = 5; p31 = 50; p32 = 10; };
+      g = {
+        loss.gemodel = { p = 1; r = 10; oneMinusH = 70; oneMinusK = 0.5; };
+        ecn = true;
+      };
+    };
+  } 0;
 }

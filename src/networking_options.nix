@@ -162,7 +162,7 @@ lib.types.submodule {
                 description = "Compute this interface's MAC address deterministically during nix evaluation instead of leaving it to the kernel at runtime. Overrides veth-level and top-level deterministicMacAddress. Ignored if macAddress is set explicitly.";
               };
               netem = lib.mkOption {
-                type = lib.types.nullOr (import ./netem_options.nix { inherit pkgs; });
+                type = lib.types.nullOr (import ./netem_options.nix { inherit pkgs; }).type;
                 default = null;
                 description = "netem traffic shaping parameters. Overrides veth-level netem.";
               };
