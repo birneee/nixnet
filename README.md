@@ -117,6 +117,10 @@ xdg-open $(nix build 'github:birneee/nixnet?dir=examples/ping#mermaid-svg' --no-
 
 [Full Option Docs](https://github.com/birneee/nixnet/wiki/nixnet-options-docs-latest)
 
+## FAQ
+
+[Frequently Asked Questions](FAQ.md)
+
 ## Execution Phases
 
 The experiment testbed runs in two phases:
