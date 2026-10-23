@@ -9,6 +9,46 @@ let
 in
 lib.types.submodule {
   options = {
+    vm = lib.mkOption {
+      type = lib.types.nullOr lib.types.deferredModule;
+      default = null;
+      example = lib.literalExpression ''
+        { pkgs, ... }:
+        {
+          virtualisation.memorySize = 1024;
+          environment.systemPackages = [ pkgs.iperf3 ];
+          systemd.services.iperf = nixnet.vmService {
+            exec = "iperf3 -c 10.0.0.2 > ./stdout";
+            await = true;
+          };
+        }
+      '';
+      description = ''
+        NixOS configuration making this node a VM (QEMU) with its own kernel, instead of a
+        sandbox on the host's, with all of the node's interfaces. Set to `{ }` for a plain NixOS
+        VM. Requires `/dev/kvm` and `/dev/vhost-net`. It starts with the experiment's scripts,
+        its output prefixed like theirs, its console in `qemu.log` in the node's workDir, which
+        is mounted at `/pwd`. QEMU settings go under `virtualisation`, e.g.
+        `virtualisation.memorySize`, sysctl in `boot.kernel.sysctl`, a NIC's link settings,
+        e.g. offloads, in `systemd.network.links.<interface>`, which names it.
+
+        What runs in the VM are services, e.g. from `nixnet.vmService { exec; await ? false; }`,
+        which runs `exec` like a node's script: once the network is online, in `/pwd`, with the
+        VM's `environment.systemPackages`. The experiment awaits a VM with awaited services: it
+        powers off once all of them finished, failing if any failed. A VM without awaited services
+        is stopped with the experiment.
+
+        Each interface of the node becomes a wire to the VM: tc redirects every frame
+        between it and a tap device of the VM, both ways. Effects:
+
+        - the VM's NIC is the end of the veth, with the interface's MAC address and mtu;
+          netem still applies to the interface
+        - the interface's addresses, routes and gateways are configured in the VM
+        - the top-level `sysctl` doesn't reach the VM
+        - options of a sandbox without an effect on a VM, e.g. `scripts`, `sysctl` or an
+          interface's `arp`, `arpPrefill`, `link` or `ethtool`, are rejected
+      '';
+    };
     packages = lib.mkOption {
       type = lib.types.listOf lib.types.package;
       default = [ ];

@@ -204,7 +204,7 @@ in
       description = "Packages prepended to PATH for testbed hooks (preSetup, postSetup, preRun, postRun) and testbed-level scripts. Defaults to a set of standard tools; extend with \`lib.mkOptionDefault [ yourPkg ]\`.";
     };
     sysctl = nixosSysctlOption // {
-      description = nixosSysctlOption.description + " Can be overridden per node.";
+      description = nixosSysctlOption.description + " Can be overridden per node. Not applied to VM nodes, see `nodes.<name>.vm`.";
     };
     shareWayland = lib.mkOption {
       type = lib.types.bool;
@@ -377,6 +377,27 @@ in
             message = "nixnet: deterministicMacAddress collision: ${lib.concatStringsSep ", " deterministicCollisions} — set macAddress explicitly to resolve";
           }
         ]
-        ++ renamedNsAssertions;
+        ++ renamedNsAssertions
+        ++ (import ./vm.nix { inherit pkgs; }).assertions (
+          let
+            # a node and its interface with nothing set, as filled in from the defaults above
+            empty =
+              (lib.evalModules {
+                modules = [
+                  (import ./testbed_options.nix { inherit pkgs nixpkgs; })
+                  {
+                    veths.empty = {
+                      a.node = "empty";
+                      b.node = "peer";
+                    };
+                  }
+                ];
+              }).config.nodes.empty;
+          in
+          {
+            emptyNode = empty;
+            emptyInterface = empty.networking.interfaces.empty;
+          }
+        ) config.nodes;
     };
 }

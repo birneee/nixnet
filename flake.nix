@@ -108,6 +108,10 @@
                     _binds = map (e: e.path) entries;
                   };
                 });
+
+              # A systemd service for a VM node, run like a node's script, see `nodes.<name>.vm`
+              inherit (import ./src/vm.nix { inherit pkgs; }) vmService;
+
               mkExperiment =
                 networkConfig:
                 buildExperiment {

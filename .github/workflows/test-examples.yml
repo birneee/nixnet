@@ -38,6 +38,13 @@ jobs:
           - name: phantomlink
           - name: tcpreplay
           - name: quic-go
+          - name: qemu_bbrv3
+          - name: qemu_iperf
+        exclude:
+          # the XanMod kernel is not cached for aarch64, it would be compiled
+          - runner: ubuntu-24.04-arm
+            example:
+              name: qemu_bbrv3
     steps:
       - uses: actions/checkout@v6
       - uses: DeterminateSystems/nix-installer-action@v22
@@ -45,6 +52,10 @@ jobs:
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           sudo sysctl -w kernel.perf_event_paranoid=1
+          # VM nodes need kvm and vhost-net
+          for dev in /dev/kvm /dev/vhost-net; do
+            if [ -e "$dev" ]; then sudo chmod 666 "$dev"; fi
+          done
       - name: Run ${{ matrix.example.name }}
         if: ${{ !matrix.example.skip_run }}
         run: ${{ matrix.example.sudo && 'sudo $(which nix)' || 'nix' }} run ./examples/${{ matrix.example.name }} --override-input nixnet path:.

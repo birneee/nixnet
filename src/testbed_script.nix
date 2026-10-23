@@ -12,6 +12,9 @@ let
     }).outPath
     + "/bin/write_run_json";
   nodes = config.nodes;
+  # nodes whose namespace gets sysctl, addresses and routes; a VM node's addresses and routes go
+  # to its VM, see vm.nix
+  sandboxNodes = lib.filterAttrs (_: nodeCfg: nodeCfg.vm == null) nodes;
   veths = lib.attrValues config.veths;
   workDir = config.workDir;
   workDirEnsureEmpty = config.workDirEnsureEmpty;
@@ -143,6 +146,9 @@ let
           + " \\\n  --setenv \"PIPEWIRE_REMOTE=pipewire-0\""
           + " \\\n  --setenv \"PULSE_SERVER=unix:/run/user/0/pulse/native\""
         );
+        vmDevices = lib.optionalString (nodeCfg != null && nodeCfg.vm != null) (
+          lib.concatMapStrings (flag: " \\\n  ${flag}") (import ./vm.nix { inherit pkgs; }).jailFlags
+        );
         binds = lib.concatMapStrings (
           binding:
           if binding.readonly then
@@ -158,7 +164,7 @@ let
         ++ [
           "jail add \\\n  --setenv PATH=$_PATH${
             lib.optionalString (dir != "") " \\\n  --bind '${dir}' /pwd \\\n  --chdir /pwd"
-          }${wayland}${pipewire}${binds} \\\n  ${name}"
+          }${wayland}${pipewire}${vmDevices}${binds} \\\n  ${name}"
         ]
       )
     ) nonBridgeNames
@@ -211,7 +217,7 @@ let
     in
     lib.optionalString (nonEmpty != [ ])
       "ip netns exec ${nodeName} sysctl -q -w \\\n  ${lib.concatStringsSep " \\\n  " nonEmpty}"
-  ) nodes;
+  ) sandboxNodes;
 
   # Build a tc netem command string from a resolved netem config and interface.
   mkNetemCmd =
@@ -299,7 +305,7 @@ let
             }) (getAddrs ifaceCfg)
           ) nodeCfg.networking.interfaces
         )
-      ) nodes
+      ) sandboxNodes
     );
 
   ipv4Addrs = collectAddrs (ifaceCfg: ifaceCfg.ipv4.addresses);
@@ -507,7 +513,7 @@ let
       in
       lib.optionalString (lines != [ ])
         (mkIpBatch ipCmd nodeName (lib.concatStringsSep "\n" lines))
-    ) nodes;
+    ) sandboxNodes;
 
   # Declarative IPv4/IPv6 Routing
   ipv4RouteCommands = mkRouteCommands "ip" (nodeCfg: nodeCfg.networking.defaultGateway) (
@@ -646,4 +652,5 @@ in
   inherit scriptText tbAutoHostBinds;
   nodeScriptFiles = nodeScripts.nsScriptFiles;
   tbScriptFiles = nodeScripts.tbScriptFiles;
+  inherit (nodeScripts) vmScriptFiles;
 }

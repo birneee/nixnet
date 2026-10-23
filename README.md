@@ -80,6 +80,7 @@ To run NixNet your system requires:
 - **Foreground scripts** — full terminal access for interactive tools
 - **Sandboxing** — experiments are isolated with Linux namespaces to prevent side effects
 - **Host binds** — expose host directories, files and binaries inside node namespaces via `hostBind`
+- **NixOS VMs** — make a node a QEMU VM with its own kernel via `vm`, wired to all of its interfaces
 - **Automatic cleanup** — namespaces, files and processes cleaned up on exit
 - **Mermaid diagrams** — topology diagram from config
 

@@ -25,6 +25,12 @@ let
     scriptName: scriptCfg: mkScriptFile "experiment" scriptName scriptCfg
   ) config.scripts;
 
+  # a VM node's VM, launched like a background script, see vm.nix
+  vms = lib.mapAttrs (import ./vm.nix { inherit pkgs; }).mkVm (
+    lib.filterAttrs (_: nodeCfg: nodeCfg.vm != null) nodes
+  );
+  vmScriptFiles = lib.mapAttrs (nodeName: vm: mkScriptFile nodeName "vm" { exec = vm.script; }) vms;
+
   # All scripts as a flat list of { label, scriptPath, exec, scriptCfg }
   allScripts =
     lib.concatLists (
@@ -43,7 +49,17 @@ let
       scriptPath = "\"$(dirname \"$0\")/../scripts/${scriptName}\"";
       exec = "";
       inherit scriptName scriptCfg;
-    }) config.scripts;
+    }) config.scripts
+    ++ lib.mapAttrsToList (nodeName: vm: {
+      label = nodeName;
+      scriptName = "vm";
+      scriptPath = "\"$(dirname \"$0\")/../nodes/${nodeName}/vm\"";
+      exec = "jail enter ${nodeName} ";
+      scriptCfg = {
+        foreground = false;
+        await = vm.awaited;
+      };
+    }) vms;
 
   # Launch scripts in parallel; mark awaited ones; skip foreground scripts
   launchScripts = lib.concatMap (
@@ -92,6 +108,7 @@ in
   inherit
     nsScriptFiles
     tbScriptFiles
+    vmScriptFiles
     launchScripts
     fgScripts
     ;

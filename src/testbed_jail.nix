@@ -50,10 +50,17 @@ pkgs.stdenv.mkDerivation {
       ''
     ) config.scripts
   )
+  + lib.concatStrings (
+    lib.mapAttrsToList (nodeName: vmFile: ''
+      mkdir -p $out/nodes/${nodeName}
+      install -m 0755 ${vmFile} $out/nodes/${nodeName}/vm
+    '') gen.vmScriptFiles
+  )
   + (
     let
       anyNodeShareWayland = lib.any (node: node.shareWayland) (lib.attrValues nodes);
       anyNodeSharePipeWire = lib.any (node: node.sharePipeWire) (lib.attrValues nodes);
+      anyNodeVm = lib.any (node: node.vm != null) (lib.attrValues nodes);
       jailFlags = [
         ''--setenv "PATH=$PATH"''
       ]
@@ -65,6 +72,8 @@ pkgs.stdenv.mkDerivation {
         ''--setenv "PIPEWIRE_REMOTE=pipewire-0"''
         ''--setenv "PULSE_SERVER=unix:/run/user/0/pulse/native"''
       ]
+      # the devices VM nodes take from the testbed
+      ++ lib.optionals anyNodeVm (import ./vm.nix { inherit pkgs; }).jailFlags
       ++ map (
         binding:
         if binding.readonly then
