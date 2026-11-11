@@ -4,7 +4,7 @@
     flake-parts.url = "github:hercules-ci/flake-parts";
     nixnet.url = "github:birneee/nixnet";
     phantomlink = {
-      url = "github:birneee/phantomlink";
+      url = "github:robinohs/phantomlink";
       flake = false;
     };
   };

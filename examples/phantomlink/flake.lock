@@ -120,15 +120,15 @@
     "phantomlink": {
       "flake": false,
       "locked": {
-        "lastModified": 1788479544,
-        "narHash": "sha256-H6QMZ1/SExV63DvI45gVtr24oUyHOZuRD0ZX2/zJjnE=",
-        "owner": "birneee",
+        "lastModified": 1794394775,
+        "narHash": "sha256-mNGt5S/K9cp1POy2QvTKYqAuQ5x3yxZm/qic+9elPwc=",
+        "owner": "robinohs",
         "repo": "phantomlink",
-        "rev": "685c24cc8293ad76160715f4f2bb6531c2039299",
+        "rev": "6f59406d6c2b21a9e365491c98d2762e4c7d8b10",
         "type": "github"
       },
       "original": {
-        "owner": "birneee",
+        "owner": "robinohs",
         "repo": "phantomlink",
         "type": "github"
       }
