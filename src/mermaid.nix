@@ -28,7 +28,7 @@ let
               (lib.optionalString (netemCfg.delayMs != null) "${toString netemCfg.delayMs}ms")
               (lib.optionalString (netemCfg.loss != null) (netemModule.mkLossArgs netemCfg.loss))
               (lib.optionalString (netemCfg.ecn == true) "ecn")
-              (lib.optionalString (netemCfg.rateMbit != null) "${toString netemCfg.rateMbit}Mbit/s")
+              (lib.optionalString (netemCfg.rateMbit != null) "${builtins.toJSON netemCfg.rateMbit}Mbit/s")
             ]
           )
         );

@@ -161,9 +161,9 @@ let
       };
       lossPercent = mkRemovedOption;
       rateMbit = lib.mkOption {
-        type = lib.types.nullOr lib.types.int;
+        type = lib.types.nullOr lib.types.number;
         default = null;
-        description = "Rate limit in Mbit/s.";
+        description = "Rate limit in Mbit/s, fractions allowed (e.g. 0.5).";
       };
       limit = lib.mkOption {
         type = lib.types.nullOr lib.types.int;
@@ -209,7 +209,7 @@ in
       # BDP in packets: BDP_bytes / mtu
       bdpPackets =
         if n.delayMs != null && n.rateMbit != null && mtu != null then
-          n.rateMbit * 1000000 / 8 * n.delayMs / 1000 / mtu
+          builtins.floor (n.rateMbit * 1000000 / 8 * n.delayMs / 1000 / mtu)
         else
           null;
       effectiveLimit =
@@ -230,7 +230,7 @@ in
         (lib.optionalString (n.delayMs != null) "delay ${toString n.delayMs}ms")
         (lib.optionalString (n.loss != null) (mkLossArgs n.loss))
         (lib.optionalString (n.ecn == true) "ecn")
-        (lib.optionalString (n.rateMbit != null) "rate ${toString n.rateMbit}Mbit")
+        (lib.optionalString (n.rateMbit != null) "rate ${builtins.toJSON n.rateMbit}Mbit")
         (lib.optionalString (effectiveLimit != null) "limit ${toString effectiveLimit}")
       ]
       ++ extraArgs

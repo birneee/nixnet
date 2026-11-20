@@ -55,6 +55,15 @@ lib.runTests {
     expr = argsOf { link = { delayMs = 10; loss.random.percent = 1; ecn = true; rateMbit = 100; }; };
     expected = "delay 10ms loss random 1% ecn rate 100Mbit";
   };
+  testFractionalRate = {
+    expr = argsOf { link.rateMbit = 0.5; };
+    expected = "rate 0.5Mbit";
+  };
+  # BDP 6.5Mbit/s * 20ms = 16250 bytes, 10.8 packets of 1500 bytes
+  testFractionalRateAutoLimit = {
+    expr = netemModule.mkArgs (resolvedA { link = { delayMs = 20; rateMbit = 6.5; autoLimit = true; }; }) 1500 "v0";
+    expected = "delay 20ms rate 6.5Mbit limit 10";
+  };
 
   # interface loss replaces the link loss as a whole, other fields cascade individually
   testIfaceLossReplacesLinkLoss = {
